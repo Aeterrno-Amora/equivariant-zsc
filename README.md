@@ -7,7 +7,7 @@ This repo is largely based off the [Off-Belief Learning repo](https://github.com
 
 ## Environment Setup
 
-We have been using `pytorch-1.5.1`, `cuda-10.1`, and `cudnn-v7.6.5` in
+We have been using `python-3.12.2`, `pytorch-2.2.2`, `cuda-12.0`, and `cudnn-v8.9.2` in
 our development environment. We have not tested it extensively in
 other environment configurations but it may also work. You will need
 to change the pybind submodule to the same version as the one used by
@@ -15,17 +15,17 @@ your pytorch, which is detailed in later section. We also use
 conda/miniconda to manage environments.
 
 ```shell
-conda create -n hanabi python=3.7
+conda create -n hanabi python=3.12
 conda activate hanabi
 
 # install pytorch
-# the code was developed with pytorch 1.5.1, but newer versions may also work
-pip install torch==1.5.1+cu101 torchvision==0.6.1+cu101 -f https://download.pytorch.org/whl/torch_stable.html
+# the code was developed with pytorch 2.2.2 but newer versions may also work
+conda install pytorch pytorch-cuda=12.1 -c pytorch -c nvidia
 
 # install other dependencies
 pip install psutil
 
-# install a newer cmake if the current version is < 3.15
+# install a newer cmake if the current version is < 3.24
 conda install -c conda-forge cmake
 ```
 
@@ -47,12 +47,12 @@ export LD_LIBRARY_PATH=${CONDA_PREFIX}/lib:${LD_LIBRARY_PATH}
 export OMP_NUM_THREADS=1
 ```
 
-If you use a *newer version of pytorch* (e.g. >= v1.9), first check
-out the pybind module to use the corresponding version (the
+If you use *another version of pytorch* instead of 2.2.2, you may need
+to check out the pybind module to use the corresponding version (the
 version can be found at pybind11 row [here](https://github.com/pytorch/pytorch/tree/master/third_party)):
 ```
 cd third_party/pybind11
-git checkout v2.6.2
+git checkout v2.11
 cd ../..
 ```
 
