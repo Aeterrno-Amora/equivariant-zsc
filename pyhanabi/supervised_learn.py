@@ -24,8 +24,13 @@ import utils
 import rela
 import hanalearn
 
+from common_utils.hparams import set_hparams, hparams
 from supervised_model import SupervisedAgent
 from eval import evaluate
+
+torch.backends.cudnn.benchmark = True
+
+set_hparams()
 
 
 def compute_loss(pred_logits, legal_move, gt_a, mask):
@@ -97,7 +102,7 @@ def train_rl(
     stopwatch,
 ):
     for i in range(num_batch):
-        num_update = i + epoch * args.epoch_len
+        num_update = i + epoch * hparams['epoch_len']
         if num_update % num_update_between_sync == 0:
             agent.sync_target_with_online()
 
@@ -156,8 +161,8 @@ def create_data_generator(
     )
     game_params = {
         "players": str(num_player),
-        "random_start_player": "0",
-        "bomb": "0",
+        "random_start_player": "0", # TODO: why hardcoded?
+        "bomb": str(hparams['bomb']),
     }
     data_gen.set_game_params(game_params)
     for i, g in enumerate(games):
@@ -190,8 +195,8 @@ if __name__ == "__main__":
     # network config
     parser.add_argument("--device", type=str, default="cuda:0")
     parser.add_argument("--net", type=str, default="lstm")
-    parser.add_argument("--rnn_hid_size", type=int, default=512)
-    parser.add_argument("--lstm_layers", type=int, default=1)
+    parser.add_argument("--rnn_hid_dim", type=int, default=512)
+    parser.add_argument("--num_lstm_layers", type=int, default=1)
     parser.add_argument("--dropout", type=float, default=0.0)
     parser.add_argument("--load_ckpt", type=str, default=None)
     # optim
@@ -210,86 +215,83 @@ if __name__ == "__main__":
         format="[%(asctime)s]%(levelname)s: %(message)s",
     )
     args = parser.parse_args()
-    if args.shuffle_color:
+    if hparams['shuffle_color']:
         # to make data generation speed roughly the same as consumption
-        args.num_thread = 10
-        args.inf_data_loop = 1
+        hparams['num_thread'] = 10
+        hparams['inf_data_loop'] = 1
 
-    os.makedirs(args.save_dir, exist_ok=True)
-    sys.stdout = common_utils.Logger(os.path.join(args.save_dir, "train.log"))
-    saver = common_utils.TopkSaver(args.save_dir, 3)
+    os.makedirs(hparams['save_dir'], exist_ok=True)
+    sys.stdout = common_utils.Logger(os.path.join(hparams['save_dir'], "train.log"))
+    saver = common_utils.TopkSaver(hparams['save_dir'], 3)
 
-    games = pickle.load(open(args.dataset, "rb"))
+    games = pickle.load(open(hparams['dataset'], "rb"))
 
-    if args.replay_buffer_size < 0:
-        args.replay_buffer_size = len(games) * args.num_player
+    if hparams['replay_buffer_size'] < 0:
+        hparams['replay_buffer_size'] = len(games) * hparams['num_player']
 
     # create data generator
     data_gen, replay_buffer = create_data_generator(
         games,
-        args.num_player,
-        args.num_thread,
-        args.inf_data_loop,
-        args.max_len,
-        args.shuffle_color,
-        args.replay_buffer_size,
-        args.prefetch,
-        args.seed,
+        hparams['num_player'],
+        hparams['num_thread'],
+        hparams['inf_data_loop'],
+        hparams['max_len'],
+        hparams['shuffle_color'],
+        hparams['replay_buffer_size'],
+        hparams['prefetch'],
+        hparams['seed'],
     )
-    data_gen.start_data_generation(args.inf_data_loop, args.seed)
+    data_gen.start_data_generation(hparams['inf_data_loop'], hparams['seed'])
 
     # create network and optim
-    game = create_envs(1, 1, args.num_player, 0, args.max_len)[0]
+    game = create_envs(1)[0]
     _, priv_in_dim, publ_in_dim = game.feature_size(False)
     num_action = game.num_action()
-    if args.method == "sl":
+    if hparams['method'] == "sl":
         net = SupervisedAgent(
-            args.device,
+            hparams['train_device'],
             priv_in_dim,
             publ_in_dim,
-            args.rnn_hid_size,
+            hparams['rnn_hid_dim'],
             num_action,
-            args.lstm_layers,
-            args.net,
-            args.dropout,
-        ).to(args.device)
-        optim = torch.optim.Adam(net.parameters(), lr=args.lr, eps=args.eps)
-    elif args.method == "rl":
-        agent = r2d2.R2D2Agent(
-            False,  # vdn
-            args.multi_step,
-            args.gamma,
-            0.9,  # args.eta,
-            args.device,
-            game.feature_size(False),
-            args.rnn_hid_size,
-            num_action,
-            args.net,
-            args.lstm_layers,
-            False,  # args.boltzmann_act,
-            True,  # uniform priority
-            False,  # args.off_belief,
-        )
+            hparams['num_lstm_layers'],
+            hparams['net'],
+            hparams['dropout'],
+        ).to(hparams['train_device'])
+        optim = torch.optim.Adam(net.parameters(), lr=hparams['lr'], eps=hparams['eps'])
+    elif hparams['method'] == "rl":
+        in_dim = game.feature_size(False)
+        net_config = hparams['net']
+        net_config['in_dim'] = in_dim
+        net_config['out_dim'] = num_action
+        if isinstance(in_dim, int):
+            assert in_dim == 783
+            net_config['priv_in_dim'] = in_dim - 125
+            net_config['publ_in_dim'] = in_dim - 2 * 125
+        else:
+            net_config['priv_in_dim'] = in_dim[1]
+            net_config['publ_in_dim'] = in_dim[2]
+        agent = r2d2.R2D2Agent().to(hparams['train_device'])
         agent.sync_target_with_online()
         optim = torch.optim.Adam(
-            agent.online_net.parameters(), lr=args.lr, eps=args.eps
+            agent.online_net.parameters(), lr=hparams['lr'], eps=hparams['eps']
         )
         net = agent
 
     # save extra values for easy loading
-    args.priv_in_dim = priv_in_dim
-    args.publ_in_dim = publ_in_dim
-    args.num_action = num_action
+    hparams['priv_in_dim'] = priv_in_dim
+    hparams['publ_in_dim'] = publ_in_dim
+    hparams['num_action'] = num_action
     pprint.pprint(vars(args))
 
-    if args.load_ckpt:
-        checkpoint = torch.load(root_path / args.load_ckpt)
-        print(f"Load checkpoint at {root_path / args.load_ckpt}")
+    if hparams['load_ckpt']:
+        checkpoint = torch.load(root_path / hparams['load_ckpt'])
+        print(f"Load checkpoint at {root_path / hparams['load_ckpt']}")
         net.load_state_dict(checkpoint)
 
     speed = 0
     total_t = time.time()
-    while replay_buffer.size() < args.replay_buffer_size:
+    while replay_buffer.size() < hparams['replay_buffer_size']:
         prev_replay_size = replay_buffer.size()
         print(f"generating data: {prev_replay_size}, speed: {speed}/s")
         print(common_utils.get_mem_usage())
@@ -303,55 +305,51 @@ if __name__ == "__main__":
     stopwatch = common_utils.Stopwatch()
     tachometer = utils.Tachometer()
     best_eval = 0
-    for epoch in range(args.num_epoch):
+    for epoch in range(hparams['num_epoch']):
         stat.reset()
         stopwatch.reset()
         tachometer.start()
 
-        if args.method == "sl":
+        if hparams['method'] == "sl":
             train(
                 net,
-                args.device,
+                hparams['train_device'],
                 optim,
                 replay_buffer,
-                args.batchsize,
-                args.epoch_len,
-                args.grad_clip,
+                hparams['batchsize'],
+                hparams['epoch_len'],
+                hparams['grad_clip'],
                 stat,
                 stopwatch,
             )
-        elif args.method == "rl":
+        elif hparams['method'] == "rl":
             train_rl(
                 agent,
-                args.device,
+                hparams['train_device'],
                 optim,
                 replay_buffer,
-                args.batchsize,
-                args.epoch_len,
-                args.grad_clip,
+                hparams['batchsize'],
+                hparams['epoch_len'],
+                hparams['grad_clip'],
                 epoch,
-                args.num_update_between_sync,
-                args.aux_weight,
+                hparams['num_update_between_sync'],
+                hparams['aux_weight'],
                 stat,
                 stopwatch,
             )
 
         print(f"Epoch {epoch}:")
         print(common_utils.get_mem_usage())
-        tachometer.lap(replay_buffer, args.epoch_len * args.batchsize, 1)
+        tachometer.lap(replay_buffer, hparams['epoch_len'] * hparams['batchsize'], 1)
         stopwatch.summary()
         stat.summary(epoch)
 
         net.train(False)
         score, perfect, *_ = evaluate(
-            [net for _ in range(args.num_player)],
+            [net for _ in range(hparams['num_player'])],
             10000,  # num game
             1,  # seed
-            0,  # bomb
-            0,  # eps
-            False,  # sad
-            False,  # hide_action
-            device=args.device,
+            device=hparams['train_device'],
         )
         net.train(True)
         print(f"epoch {epoch}, eval score: {score:5f}, perfect: {100 * perfect:.2f}%")

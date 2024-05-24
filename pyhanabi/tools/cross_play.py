@@ -51,7 +51,7 @@ def cross_play(models, num_player, num_game, seed):
     perfs = defaultdict(list)
     for comb in combs:
         num_model = len(set(comb))
-        score = evaluate_saved_model(comb, num_game, seed, 0)[0]
+        score = evaluate_saved_model(comb, num_game, seed)[0]
         perfs[num_model].append(score)
 
     for num_model, scores in perfs.items():

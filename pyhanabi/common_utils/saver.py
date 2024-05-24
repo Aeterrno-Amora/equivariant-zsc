@@ -10,32 +10,32 @@ import torch
 
 
 class TopkSaver:
-    def __init__(self, save_dir, topk):
-        self.save_dir = save_dir
+    def __init__(self, work_dir, topk):
+        self.work_dir = work_dir
         self.topk = topk
         self.worse_perf = -float("inf")
         self.worse_perf_idx = 0
         self.perfs = [self.worse_perf]
 
-        if not os.path.exists(save_dir):
-            os.makedirs(save_dir)
+        if not os.path.exists(work_dir):
+            os.makedirs(work_dir)
 
     def save(self, model, state_dict, perf, save_latest=False, force_save_name=None):
         if force_save_name is not None:
             model_name = "%s.pthm" % force_save_name
             weight_name = "%s.pthw" % force_save_name
             if model is not None:
-                model.save(os.path.join(self.save_dir, model_name))
+                model.save(os.path.join(self.work_dir, model_name))
             if state_dict is not None:
-                torch.save(state_dict, os.path.join(self.save_dir, weight_name))
+                torch.save(state_dict, os.path.join(self.work_dir, weight_name))
 
         if save_latest:
             model_name = "latest.pthm"
             weight_name = "latest.pthw"
             if model is not None:
-                model.save(os.path.join(self.save_dir, model_name))
+                model.save(os.path.join(self.work_dir, model_name))
             if state_dict is not None:
-                torch.save(state_dict, os.path.join(self.save_dir, weight_name))
+                torch.save(state_dict, os.path.join(self.work_dir, weight_name))
 
         if perf <= self.worse_perf:
             # print('i am sorry')
@@ -45,9 +45,9 @@ class TopkSaver:
         model_name = "model%i.pthm" % self.worse_perf_idx
         weight_name = "model%i.pthw" % self.worse_perf_idx
         if model is not None:
-            model.save(os.path.join(self.save_dir, model_name))
+            model.save(os.path.join(self.work_dir, model_name))
         if state_dict is not None:
-            torch.save(state_dict, os.path.join(self.save_dir, weight_name))
+            torch.save(state_dict, os.path.join(self.work_dir, weight_name))
 
         if len(self.perfs) < self.topk:
             self.perfs.append(perf)

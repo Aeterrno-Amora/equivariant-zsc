@@ -6,7 +6,7 @@
 #
 #!/bin/bash
 python train_belief.py \
-       --save_dir exps/belief \
+       --work_dir exps/belief \
        --num_thread 40 \
        --num_game_per_thread 40 \
        --batchsize 128 \

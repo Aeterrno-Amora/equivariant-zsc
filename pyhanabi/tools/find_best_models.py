@@ -33,7 +33,7 @@ def find_best_models(
         best_score = -1
         for m in models:
             _, _, _, scores, _ = evaluate_saved_model(
-                [m] * num_player, num_game, seed, 0
+                [m] * num_player, num_game, seed
             )
             mean_score = np.mean(scores)
             if mean_score > best_score:
@@ -41,7 +41,7 @@ def find_best_models(
                 best_score = mean_score
 
         score, sem, perfect, _, _ = evaluate_saved_model(
-            [best_model] * num_player, eval_num_game, eval_seed, 0
+            [best_model] * num_player, eval_num_game, eval_seed
         )
         result = {
             "best_model": best_model,

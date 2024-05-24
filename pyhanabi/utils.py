@@ -11,6 +11,7 @@ import json
 import torch
 import numpy as np
 
+from common_utils.hparams import load_config, override_config
 import r2d2
 from create import create_envs
 import common_utils
@@ -110,7 +111,8 @@ def parse_hydra_dict(lines):
 
 
 def get_train_config(weight_file):
-    log = os.path.join(os.path.dirname(weight_file), "train.log")
+    log = os.path.join(os.path.dirname(weight_file), "config.yaml")
+    # TODO
     if not os.path.exists(log):
         return None
 
@@ -131,66 +133,34 @@ def flatten_dict(d, new_dict):
 
 
 def load_agent(weight_file, overwrite):
-    """
-    overwrite has to contain "device"
-    """
-    if weight_file == "legacy":
-        from legacy_agent import load_legacy_agent
-
-        return load_legacy_agent()
-    if "arxiv" in weight_file:
-        from legacy_agent import load_legacy_agent
-
-        return load_legacy_agent(weight_file)
-
+    '''It's advised to specify "device" in overwrite.'''
     print("loading file from: ", weight_file)
-    cfg = get_train_config(weight_file)
-    assert cfg is not None
+    config_fn = os.path.join(os.path.dirname(weight_file), "config.yaml")
+    if os.path.exists(config_fn):
+        config, _ = load_config(config_fn)
+    else:
+        config = {}
 
-    if "core" in cfg:
-        new_cfg = {}
-        flatten_dict(cfg, new_cfg)
-        cfg = new_cfg
+    override_config(config, overwrite)
 
-    hand_size = cfg.get("hand_size", 5)
+    game = create_envs(1)[0] # just to get in/out dim
+    in_dim = game.feature_size(config['sad'])
+    out_dim = game.num_action()
+    net_config = config['net']
+    net_config['in_dim'] = in_dim
+    net_config['out_dim'] = out_dim
+    if isinstance(in_dim, int):
+        assert in_dim == 783
+        net_config['priv_in_dim'] = in_dim - 125
+        net_config['publ_in_dim'] = in_dim - 2 * 125
+    else:
+        net_config['priv_in_dim'] = in_dim[1]
+        net_config['publ_in_dim'] = in_dim[2]
 
-    game = create_envs(
-        1,
-        1,
-        cfg["num_player"],
-        cfg["train_bomb"],
-        cfg["max_len"],
-        hand_size=hand_size,
-    )[0]
-
-    config = {
-        "vdn": overwrite["vdn"] if "vdn" in overwrite else cfg["method"] == "vdn",
-        "multi_step": overwrite.get("multi_step", cfg["multi_step"]),
-        "gamma": overwrite.get("gamma", cfg["gamma"]),
-        "eta": 0.9,
-        "device": overwrite["device"],
-        "in_dim": game.feature_size(cfg["sad"]),
-        "hid_dim": cfg["hid_dim"] if "hid_dim" in cfg else cfg["rnn_hid_dim"],
-        "out_dim": game.num_action(),
-        "num_lstm_layer": cfg.get("num_lstm_layer", overwrite.get("num_lstm_layer", 2)),
-        "boltzmann_act": overwrite.get(
-            "boltzmann_act", cfg.get("boltzmann_act", False)
-        ),
-        "uniform_priority": overwrite.get("uniform_priority", False),
-        "net": cfg.get("net", "publ-lstm"),
-        "off_belief": overwrite.get("off_belief", cfg.get("off_belief", False)),
-    }
-    if cfg.get("net", None) == "transformer":
-        config["nhead"] = cfg["nhead"]
-        config["nlayer"] = cfg["nlayer"]
-        config["max_len"] = cfg["max_len"]
-
-    config["equivariant"] = 0
-    
-    agent = r2d2.R2D2Agent(**config).to(config["device"])
+    agent = r2d2.R2D2Agent(hparams=config).to(config["device"])
     load_weight(agent.online_net, weight_file, config["device"])
     agent.sync_target_with_online()
-    return agent, cfg
+    return agent, config
 
 
 def log_explore_ratio(games, expected_eps):

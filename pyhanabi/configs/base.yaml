@@ -1,0 +1,69 @@
+seed: 10001
+
+shuffle_color: 0
+trinary: True # trinary aux or full aux
+aux_weight: 0.
+off_belief: False
+belief_model: ~
+num_fict_sample: 10
+belief_device: cuda:2
+
+# load agents
+load_model: ""
+clone_bot: "" # behavior clone loss
+clone_weight: 0.
+clone_t: 0.02
+
+# game evironment
+num_player: 2
+hand_size: 5
+random_start_player: True
+max_len: 80 # equal to replay buffer max seq len
+gamma: 0.999 # discount factor
+eta: 0.9 # eta for aggregate priority
+bomb: 0 # score of bombing out: (0) score 0 as normal rules, (-1) deduct 1 point unless aready 0, (1) don't change scores
+eval_bomb: 0 # used in eval.evaluate()
+sad: 1
+
+# actor settings
+num_thread: 10 # number of thread_loop
+num_game_per_thread: 40
+act_device: cuda:1 # can be multiple devices seperated by ','
+actor_sync_freq: 10
+# acting strategy
+num_t: 80 # generate how many different temperatures (eps)
+act_base_eps: 0.1 # span log-uniformly from base to base**(1+alpha)
+act_eps_alpha: 7.
+boltzmann_act: False # act with softmax prob, instead of greedy
+min_t: 1e-3 # boltzmann_t span log-uniformly from min_t to max_t, corresponding beta = 1/eps
+max_t: 1e-1
+hide_action: 0
+uniform_priority: False
+
+# replay buffer settings
+burn_in_frames: 10000
+replay_buffer_size: 100000
+priority_exponent: 0.9 # alpha in p-replay
+priority_weight: 0.6 # beta in p-replay
+prefetch: 3 # number of prefetch batch
+
+# optimization/training settings
+train_device: cuda:0
+batchsize: 64
+num_epoch: 5000
+epoch_len: 1000
+num_update_between_sync: 2500
+lr: 6.25e-5
+eps: 1.5e-5 # Adam epsilon
+grad_clip: 5.
+
+# model
+vdn: True # VDN or IQL
+net:
+  cls: net.LSTMNet
+  hid_dim: 512
+  num_ff_layer: 1
+  num_lstm_layer: 2
+  public: True
+  eqc: False
+multi_step: 3 # DQN settings

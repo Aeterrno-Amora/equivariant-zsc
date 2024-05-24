@@ -16,32 +16,31 @@ def evaluate(
     agents,
     num_game,
     seed,
-    bomb,
-    eps,
-    sad,
-    hide_action,
+    sad=None,
+    hide_action=None,
     *,
     num_thread=10,
-    max_len=80,
     device="cuda:0",
 ):
     """
     evaluate agents as long as they have a "act" function
     """
-    if num_game < num_thread:
-        num_thread = num_game
-
     num_player = len(agents)
-    if not isinstance(hide_action, list):
-        hide_action = [hide_action for _ in range(num_player)]
+    if sad is None:
+        sad = hparams['sad']
+    if hide_action is None:
+        hide_action = hparams['hide_action']
     if not isinstance(sad, list):
         sad = [sad for _ in range(num_player)]
+    if not isinstance(hide_action, list):
+        hide_action = [hide_action for _ in range(num_player)]
     runners = [rela.BatchRunner(agent, device, 1000, ["act"]) for agent in agents]
 
     context = rela.Context()
-    games = create_envs(num_game, seed, num_player, bomb, max_len)
+    games = create_envs(num_game, num_player, bomb=hparams['eval_bomb'], seed=seed)
     threads = []
 
+    num_thread = min(num_thread, num_game)
     assert num_game % num_thread == 0
     game_per_thread = num_game // num_thread
     all_actors = []
@@ -80,7 +79,6 @@ def evaluate_saved_model(
     weight_files,
     num_game,
     seed,
-    bomb,
     *,
     overwrite=None,
     num_run=1,
@@ -116,8 +114,6 @@ def evaluate_saved_model(
             agents,
             num_game,
             num_game * i + seed,
-            bomb,
-            0,  # eps
             sad,
             hide_action,
         )

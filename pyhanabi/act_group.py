@@ -18,27 +18,28 @@ assert hanalearn.__file__.endswith(".so")
 class ActGroup:
     def __init__(
         self,
-        devices,
         agent,
+        explore_eps,
+        boltzmann_t,
+        replay_buffer,
+        belief_model,
+
+        act_device,
         seed,
         num_thread,
         num_game_per_thread,
         num_player,
-        explore_eps,
-        boltzmann_t,
-        method,
+        vdn,
         sad,
         shuffle_color,
         hide_action,
         trinary,
-        replay_buffer,
         multi_step,
         max_len,
         gamma,
         off_belief,
-        belief_model,
     ):
-        self.devices = devices.split(",")
+        self.devices = act_device.split(",")
 
         self.model_runners = []
         for dev in self.devices:
@@ -62,68 +63,36 @@ class ActGroup:
                 )
 
         self.actors = []
-        if method == "vdn":
-            for i in range(num_thread):
-                thread_actors = []
-                for j in range(num_game_per_thread):
+        for i in range(num_thread):
+            thread_actors = []
+            for j in range(num_game_per_thread):
+                game_actors = []
+                for k in range(1 if vdn else num_player):
                     actor = hanalearn.R2D2Actor(
                         self.model_runners[i % self.num_runners],
-                        seed,
-                        num_player,
-                        0,
-                        explore_eps,
-                        boltzmann_t,
-                        True,
-                        sad,
-                        shuffle_color,
-                        hide_action,
-                        trinary,
+                        seed, num_player, k, # player_idx=k
+                        explore_eps, boltzmann_t,
+                        vdn, sad, shuffle_color,
+                        hide_action, trinary,
                         replay_buffer,
-                        multi_step,
-                        max_len,
-                        gamma,
+                        multi_step, max_len, gamma,
                     )
+                    if self.off_belief:
+                        if self.belief_runner is None:
+                            actor.set_belief_runner(None)
+                        else:
+                            actor.set_belief_runner(
+                                self.belief_runner[i % len(self.belief_runner)]
+                            )
                     seed += 1
-                    thread_actors.append([actor])
-                self.actors.append(thread_actors)
-        elif method == "iql":
-            for i in range(num_thread):
-                thread_actors = []
-                for j in range(num_game_per_thread):
-                    game_actors = []
-                    for k in range(num_player):
-                        actor = hanalearn.R2D2Actor(
-                            self.model_runners[i % self.num_runners],
-                            seed,
-                            num_player,
-                            k,
-                            explore_eps,
-                            boltzmann_t,
-                            False,
-                            sad,
-                            shuffle_color,
-                            hide_action,
-                            trinary,
-                            replay_buffer,
-                            multi_step,
-                            max_len,
-                            gamma,
-                        )
-                        if self.off_belief:
-                            if self.belief_runner is None:
-                                actor.set_belief_runner(None)
-                            else:
-                                actor.set_belief_runner(
-                                    self.belief_runner[i % len(self.belief_runner)]
-                                )
-                        seed += 1
-                        game_actors.append(actor)
+                    game_actors.append(actor)
+                if not vdn:
                     for k in range(num_player):
                         partners = game_actors[:]
                         partners[k] = None
                         game_actors[k].set_partners(partners)
-                    thread_actors.append(game_actors)
-                self.actors.append(thread_actors)
+                thread_actors.append(game_actors)
+            self.actors.append(thread_actors)
         print("ActGroup created")
 
     def start(self):

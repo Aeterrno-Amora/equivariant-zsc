@@ -1,0 +1,7 @@
+base_config: base.yaml
+
+method: sl # sl = supervised learning; rl = reinforcement learning
+vdn: False
+sad: False
+hide_action: False
+uniform_priority: True

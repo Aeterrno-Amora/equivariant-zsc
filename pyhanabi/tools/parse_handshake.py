@@ -79,11 +79,11 @@ def create_dataset_new(
         write_replay = [True for _ in runners]
 
     replay_buffer = rela.RNNPrioritizedReplay(
-        num_game,  # args.dataset_size,
-        1,  # args.seed,
-        0,  # args.priority_exponent, uniform sampling
-        1,  # args.priority_weight,
-        0,  # args.prefetch,
+        num_game,  # hparams['dataset_size'],
+        1,  # hparams['seed'],
+        0,  # hparams['priority_exponent'], uniform sampling
+        1,  # hparams['priority_weight'],
+        0,  # hparams['prefetch'],
     )
 
     actors = []
@@ -116,11 +116,8 @@ def create_dataset_new(
 
     games = create_envs(
         num_thread * game_per_thread,
-        1,  # seed
-        config["num_player"],
-        0,  # bomb
-        80,  # config["max_len"],
-        random_start_player=random_start,
+        config["num_player"], # TODO: cfg can be different?
+        bomb=0,
     )
     context, threads = create_threads(num_thread, game_per_thread, actors, games)
 
@@ -193,11 +190,11 @@ def create_dataset(
         runner_2 = rela.BatchRunner(agent_2, "cuda:0", 100, ["act", "compute_priority"])
 
     replay_buffer = rela.RNNPrioritizedReplay(
-        num_game,  # args.dataset_size,
-        1,  # args.seed,
-        0,  # args.priority_exponent, uniform sampling
-        1,  # args.priority_weight,
-        0,  # args.prefetch,
+        num_game,  # hparams['dataset_size'],
+        1,  # hparams['seed'],
+        0,  # hparams['priority_exponent'], uniform sampling
+        1,  # hparams['priority_weight'],
+        0,  # hparams['prefetch'],
     )
 
     actors = []
@@ -219,9 +216,9 @@ def create_dataset(
             config["hide_action"],
             trinary,
             replay_buffer,
-            1,  # args.multi_step,
+            1,  # hparams['multi_step'],
             80,
-            0.999,  # args.gamma,
+            0.999,  # hparams['gamma'],
         )
         # thread_actors.append(actor)
         if weight_file_2 is None:
@@ -249,13 +246,11 @@ def create_dataset(
             actors.append([[actor, actor_2]])
 
     eps = [eps for _ in range(game_per_thread)]
-    games = create_envs(
+    games = create_envs( # TODO: cfg
         num_thread * game_per_thread,
-        1,  # seed
-        config["num_player"],
-        config["train_bomb"],
-        config["max_len"],
-        random_start_player=0,
+        config["num_player"], # can be different?
+        config["max_len"], # can be different?
+        random_start_player=0, # why this is hardcoded instead of using random_start?
     )
     context, threads = create_threads(num_thread, game_per_thread, actors, games)
 

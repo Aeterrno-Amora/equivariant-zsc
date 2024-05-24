@@ -1,0 +1,4 @@
+base_config: base.yaml
+
+bomb: 0 # used for training
+eval_bomb: 0

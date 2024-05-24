@@ -6,7 +6,7 @@
 #
 #!/bin/bash
 python selfplay.py \
-       --save_dir exps/obl2 \
+       --work_dir exps/obl2 \
        --num_thread 80 \
        --num_game_per_thread 80 \
        --sad 0 \

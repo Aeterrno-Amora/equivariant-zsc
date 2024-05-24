@@ -4,132 +4,246 @@
 # This source code is licensed under the license found in the
 # LICENSE file in the root directory of this source tree.
 #
+from itertools import permutations
 import torch
 from torch import nn
-from net import FFWDNet, PublicLSTMNet, LSTMNet, EquivariantLSTMNet, EquivariantPublicLSTMNet
+import torch.nn.functional as F
+
+from common_utils.hparams import hparams
+from common_utils.checkpoint import build_object_from_config
+
+
+def build_priv_in_perms(priv_in_dim, symmetries) -> torch.LongTensor:
+    '''-> Tensor[num_symmetries, priv_in_dim]'''
+    pass
+
+def build_out_perms(out_dim, inv_symmetries) -> torch.LongTensor:
+    '''-> Tensor[num_symmetries, out_dim]'''
+    pass
+
+
+class Model(torch.jit.ScriptModule):
+    def __init__(self, hparams=hparams):
+        super().__init__()
+        # for backward compatibility
+        self.config = hparams['net']
+        self.net = build_object_from_config(self.config, parent_cls=nn.Module)
+        # net(
+        #   priv_s: Tensor[(seq_len), batch, priv_in_dim]
+        #   publ_s: Tensor[(seq_len), batch, publ_in_dim]
+        #   hid: dict[str, Tensor[batch, num_layer, num_player, hid_dim]]
+        # ) -> (
+        #   o: Tensor[(seq_len), batch, hid_dim]
+        #   hid: dict[str, Tensor[batch, num_layer, num_player, hid_dim]]
+        # )
+
+        hid_dim = self.config['hid_dim']
+        self.fc_v = nn.Linear(hid_dim, 1)
+        self.fc_a = nn.Linear(hid_dim, self.config['out_dim'])
+        self.pred_1st = nn.Linear(hid_dim, 5 * 3) # for aux task
+
+        eqc_group = self.config.get("eqc_group")
+        self.eqc = bool(eqc_group)
+        if eqc_group == "cyclic":
+            self.symmetries = torch.tensor([
+                [0,1,2,3,4], [4,0,1,2,3], [3,4,0,1,2], [2,3,4,0,1], [1,2,3,4,0],
+            ])
+        elif eqc_group == "dihedral":
+            self.symmetries = torch.tensor([
+                [0,1,2,3,4], [1,2,3,4,0], [2,3,4,0,1], [3,4,0,1,2], [4,0,1,2,3],
+                [4,3,2,1,0], [3,2,1,0,4], [2,1,0,4,3], [1,0,4,3,2], [0,4,3,2,1],
+            ])
+        elif eqc_group == "symmetric":
+            self.symmetries = torch.tensor(list(permutations(range(5))))
+        elif eqc_group:
+            raise ValueError(f"Unsupported EQC group: {eqc_group}")
+        self.num_symmetries = len(self.symmetries)
+        self.inv_symmetries = torch.argsort(self.symmetries)
+        self.priv_in_perms = build_priv_in_perms(self.config['priv_in_dim'], self.symmetries)
+        self.publ_in_perms = self.priv_in_perms[:, 125:] - 125
+        self.out_perms = build_out_perms(self.config['out_dim'], self.inv_symmetries)
+
+    @torch.jit.script_method
+    def eqc_permute_input(
+        self, priv_s: torch.Tensor, publ_s: torch.Tensor, hid: dict[str, torch.Tensor]
+    ) -> tuple[torch.Tensor, torch.Tensor, dict[str, torch.Tensor]]:
+        '''
+        self.permute_input(
+            priv_s: Tensor[(seq_len), batch, priv_in_dim],
+            publ_s: Tensor[(seq_len), batch, publ_in_dim],
+            hid: dict[str, Tensor[batch, num_layer, num_player, hid_dim]],
+        ) -> (priv_s, publ_s, hid)
+            with batch expanded to batch * num_symmetries
+        using index arrays
+            self.priv_in_perms: LongTensor[num_symmetries, priv_in_dim]
+            self.publ_in_perms: LongTensor[num_symmetries, publ_in_dim]
+        '''
+        priv_s = priv_s[..., self.priv_in_perms].flatten(-2, -3)
+        publ_s = publ_s[..., self.publ_in_perms].flatten(-2, -3)
+        hid = {k: v.tile(self.num_symmetries, 1, 1, 1) for k, v in hid.items()}
+        return priv_s, publ_s, hid
+
+    @torch.jit.script_method
+    def eqc_symmetrize_output(
+        self, a: torch.Tensor, hid: dict[str, torch.Tensor]
+    ) -> tuple[torch.Tensor, dict[str, torch.Tensor]]:
+        '''
+        self.symmetrize_output(
+            a: Tensor[(seq_len), batch * num_symmetries, out_dim],
+            hid: dict[str, Tensor[batch * num_symmetries, num_layer, num_player, hid_dim]],
+        ) -> (a, hid)
+            with batch * num_symmetries aggregated to batch
+        using
+            self.out_perms: LongTensor[num_symmetries, out_dim]
+        '''
+        a = a.view(*a.shape[:-2], -1, self.num_symmetries, a.size(-1))
+        a = a.gather(-1, self.out_perms.expand_as(a)).mean(-2)
+        hid = {k: v.view(-1, self.num_symmetries, *v.size()[1:]).mean(1) for k, v in hid.items()}
+        return a, hid
+
+    @torch.jit.script_method
+    def get_h0(self, batchsize: int) -> dict[str, torch.Tensor]:
+        return {}
+
+    @torch.jit.script_method
+    def act(
+        self, priv_s: torch.Tensor, publ_s: torch.Tensor, hid: dict[str, torch.Tensor]
+    ) -> tuple[torch.Tensor, dict[str, torch.Tensor]]:
+        '''
+        model.act(
+            priv_s: Tensor[batch, priv_in_dim],
+            publ_s: Tensor[batch, publ_in_dim],
+            hid: dict[str, Tensor[batch, num_layer, num_player, hid_dim]]
+        ) -> (
+            a: Tensor[batch, num_action],
+            hid: dict[str, Tensor[batch, num_layer, num_player, hid_dim]]
+        )
+        '''
+        assert priv_s.dim() == 2, f"dim should be 2, [batch, dim], get {priv_s.shape}"
+
+        if self.eqc:
+            priv_s, publ_s, hid = self.eqc_permute_input(priv_s, publ_s, hid)
+
+        # hid: [batch, num_layer, num_player, dim] -> [num_layer, batch x num_player, dim]
+        if hid:
+            assert hid["h0"].dim() == 4
+            hid = {k: v.transpose(0, 1).flatten(1, 2).contiguous() for k, v in hid.items()}
+        # TODO: act has, but forward doesn't. If both need, move to Net.
+
+        o, hid = self.net(priv_s, publ_s, hid)
+        a = self.fc_a(o)
+
+        # hid: [num_layer, batch x num_player, dim] -> [batch, num_layer, num_player, dim]
+        if hid:
+            batchsize = priv_s.size(-2)
+            interim_hid_shape = (self.num_lstm_layer, batchsize, -1, self.hid_dim)
+            hid = {k: v.view(*interim_hid_shape).transpose(0, 1) for k, v in hid.items()}
+
+        if self.eqc:
+            a, hid = self.eqc_symmetrize_output(a, hid)
+
+        return a, hid
+
+    @torch.jit.script_method
+    def forward(
+        self,
+        priv_s: torch.Tensor,
+        publ_s: torch.Tensor,
+        legal_move: torch.Tensor,
+        action: torch.Tensor,
+        hid: dict[str, torch.Tensor],
+    ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
+        '''
+        model(
+            priv_s: Tensor[(seq_len), batch, priv_in_dim],
+            publ_s: Tensor[(seq_len), batch, publ_in_dim],
+            legal_move: Tensor[(seq_len), batch, num_action],
+            action: LongTensor[(seq_len), batch],
+            hid: dict[str, Tensor[(seq_len), batch, num_layer, num_player, hid_dim]]
+        ) -> (
+            qa: Tensor[(seq_len), batch],
+            greedy_action: LongTensor[(seq_len), batch],
+            q: Tensor[(seq_len), batch, num_action],
+            o: Tensor[(seq_len), batch, hid_dim]
+        )
+        '''
+        assert priv_s.dim() == 3 or priv_s.dim() == 2, f"dim = 3 or 2, [(seq_len), batch, dim], get {priv_s.shape}"
+        if self.eqc:
+            priv_s, publ_s, hid = self.eqc_permute_input(priv_s, publ_s, hid)
+        o, hid = self.net(priv_s, publ_s, hid)
+        a = self.fc_a(o) # [(seq_len), batch]
+        if self.eqc:
+            a, hid = self.eqc_symmetrize_output(a, hid)
+        v = self.fc_v(o) # [(seq_len), batch]
+        legal_a = a * legal_move
+        q = v + legal_a - legal_a.mean(-1, keepdim=True)
+        qa = q.gather(-1, action.unsqueeze(-1)).squeeze(-1)
+        legal_q = (1 + q - q.min()) * legal_move
+        greedy_action = legal_q.argmax(-1)
+        return qa, greedy_action.detach(), q, o
+
+    def pred_loss_1st(self, o, target_p, hand_slot_mask, seq_len):
+        # EQC is not implemented for aux task
+        '''
+        model.pred_loss_1st(
+            o: Tensor[seq_len, batch, hid_dim],
+            target_p: Tensor[seq_len, batch, (num_player), 5, 3],
+            hand_slot_mask: Tensor[seq_len, batch, (num_player), 5],
+            seq_len: Tensor[batch]
+        ) -> (
+            xent: Tensor[batch],
+            avg_xent: float,
+            q: Tensor[seq_len, batch, (num_player), 5, 3],
+            seq_xent: Tensor[seq_len, batch]
+        )
+        '''
+        logit = self.pred_1st(o).view(target_p.size())
+        q = F.softmax(logit, -1)
+        logq = F.log_softmax(logit, -1)
+        plogq = (target_p * logq).sum(-1)
+        xent = -(plogq * hand_slot_mask).sum(-1) / hand_slot_mask.sum(-1).clamp(min=1e-6)
+
+        if xent.dim() == 3: # [seq_len, batch, num_player]
+            xent = xent.mean(2)
+        seq_xent = xent # save before sum out
+        xent = xent.sum(0)
+        assert xent.size() == seq_len.size()
+        avg_xent = (xent / seq_len).mean().item()
+        return xent, avg_xent, q, seq_xent.detach()
 
 
 class R2D2Agent(torch.jit.ScriptModule):
-    __constants__ = [
-        "vdn",
-        "multi_step",
-        "gamma",
-        "eta",
-        "boltzmann",
-        "uniform_priority",
-        "net",
-    ]
+    __constants__ = ["vdn", "multi_step", "gamma", "eta", "boltzmann", "uniform_priority", "net"]
 
-    def __init__(
-        self,
-        vdn,
-        multi_step,
-        gamma,
-        eta,
-        device,
-        in_dim,
-        hid_dim,
-        out_dim,
-        net,
-        num_lstm_layer,
-        boltzmann_act,
-        uniform_priority,
-        off_belief,
-        equivariant,
-        greedy=False,
-        nhead=None,
-        nlayer=None,
-        max_len=None,
-    ):
+    def __init__(self, hparams=hparams):
         super().__init__()
-        if net == "ffwd":
-            self.online_net = FFWDNet(in_dim, hid_dim, out_dim).to(device)
-            self.target_net = FFWDNet(in_dim, hid_dim, out_dim).to(device)
-        elif net == "publ-lstm":
-            if equivariant:
-                self.online_net = EquivariantPublicLSTMNet(
-                    device, in_dim, hid_dim, out_dim, num_lstm_layer
-                ).to(device)
-                self.target_net = EquivariantPublicLSTMNet(
-                    device, in_dim, hid_dim, out_dim, num_lstm_layer
-                ).to(device)
-            else:
-                self.online_net = PublicLSTMNet(
-                    device, in_dim, hid_dim, out_dim, num_lstm_layer
-                ).to(device)
-                self.target_net = PublicLSTMNet(
-                    device, in_dim, hid_dim, out_dim, num_lstm_layer
-                ).to(device)
-        elif net == "lstm":
-            if equivariant:
-                self.online_net = EquivariantLSTMNet(
-                    device, in_dim, hid_dim, out_dim, num_lstm_layer
-                ).to(device)
-                self.target_net = EquivariantLSTMNet(
-                    device, in_dim, hid_dim, out_dim, num_lstm_layer
-                ).to(device)
-            else:
-                self.online_net = LSTMNet(
-                    device, in_dim, hid_dim, out_dim, num_lstm_layer
-                ).to(device)
-                self.target_net = LSTMNet(
-                    device, in_dim, hid_dim, out_dim, num_lstm_layer
-                ).to(device)
-        elif net == "transformer":
-            self.online_net = TransformerNet(
-                device, in_dim, hid_dim, out_dim, nhead, nlayer, max_len
-            )
-            self.target_net = TransformerNet(
-                device, in_dim, hid_dim, out_dim, nhead, nlayer, max_len
-            )
-        else:
-            assert False, f"{net} not implemented"
-
+        self.hparams = hparams
+        self.online_net = Model(hparams)
+        self.target_net = Model(hparams)
         for p in self.target_net.parameters():
             p.requires_grad = False
-
-        self.vdn = vdn
-        self.multi_step = multi_step
-        self.gamma = gamma
-        self.eta = eta
-        self.net = net
-        self.num_lstm_layer = num_lstm_layer
-        self.boltzmann = boltzmann_act
-        self.uniform_priority = uniform_priority
-        self.off_belief = off_belief
-        self.equivariant = equivariant
-        self.greedy = greedy
-        self.nhead = nhead
-        self.nlayer = nlayer
-        self.max_len = max_len
+        #self.vdn = vdn
+        #self.multi_step = multi_step
+        #self.gamma = gamma
+        #self.eta = eta
+        #self.net = net
+        #self.num_lstm_layer = num_lstm_layer
+        #self.boltzmann = boltzmann_act
+        #self.uniform_priority = uniform_priority
+        #self.off_belief = off_belief
+        #self.equivariant = equivariant
 
     @torch.jit.script_method
     def get_h0(self, batchsize: int) -> dict[str, torch.Tensor]:
         return self.online_net.get_h0(batchsize)
 
-    def clone(self, device, overwrite=None):
-        if overwrite is None:
-            overwrite = {}
-        cloned = type(self)(
-            overwrite.get("vdn", self.vdn),
-            self.multi_step,
-            self.gamma,
-            self.eta,
-            device,
-            self.online_net.in_dim,
-            self.online_net.hid_dim,
-            self.online_net.out_dim,
-            self.net,
-            self.num_lstm_layer,
-            overwrite.get("boltzmann_act", self.boltzmann),
-            self.uniform_priority,
-            self.off_belief,
-            self.equivariant,
-            self.greedy,
-            nhead=self.nhead,
-            nlayer=self.nlayer,
-            max_len=self.max_len,
-        )
+    def clone(self, device, override=None):
+        if override is not None:
+            hparams = self.hparams.copy()
+            hparams.update(override)
+        else:
+            hparams = self.hparams
+        cloned = type(self)(hparams)
         cloned.load_state_dict(self.state_dict())
         cloned.train(self.training)
         return cloned.to(device)
@@ -159,13 +273,13 @@ class R2D2Agent(torch.jit.ScriptModule):
         temperature: torch.Tensor,
         hid: dict[str, torch.Tensor],
     ) -> tuple[torch.Tensor, dict[str, torch.Tensor], torch.Tensor]:
-        temperature = temperature.unsqueeze(1)
         adv, new_hid = self.online_net.act(priv_s, publ_s, hid)
+        temperature = temperature.unsqueeze(1)
         assert adv.dim() == temperature.dim()
         logit = adv / temperature
         legal_logit = logit - (1 - legal_move) * 1e30
         assert legal_logit.dim() == 2
-        prob = nn.functional.softmax(legal_logit, 1)
+        prob = F.softmax(legal_logit, 1)
         action = prob.multinomial(1).squeeze(1).detach()
         return action, new_hid, prob
 
@@ -174,7 +288,7 @@ class R2D2Agent(torch.jit.ScriptModule):
         """
         Acts on the given obs, with eps-greedy policy.
         output: {'a' : actions}, a long Tensor of shape
-            [batchsize] or [batchsize, num_player]
+            [batchsize] for IQL or [batchsize, num_player] for VDN
         """
         priv_s = obs["priv_s"]
         publ_s = obs["publ_s"]
@@ -184,7 +298,7 @@ class R2D2Agent(torch.jit.ScriptModule):
         else:
             eps = torch.zeros((priv_s.size(0),), device=priv_s.device)
 
-        if self.vdn:
+        if self.hparams['vdn']:
             bsize, num_player = obs["priv_s"].size()[:2]
             priv_s = obs["priv_s"].flatten(0, 1)
             publ_s = obs["publ_s"].flatten(0, 1)
@@ -194,7 +308,7 @@ class R2D2Agent(torch.jit.ScriptModule):
 
         hid = {"h0": obs["h0"], "c0": obs["c0"]}
 
-        if self.boltzmann:
+        if self.hparams['boltzmann']:
             temp = obs["temperature"].flatten(0, 1)
             greedy_action, new_hid, prob = self.boltzmann_act(
                 priv_s, publ_s, legal_move, temp, hid
@@ -204,16 +318,15 @@ class R2D2Agent(torch.jit.ScriptModule):
             greedy_action, new_hid = self.greedy_act(priv_s, publ_s, legal_move, hid)
             reply = {}
 
-        if self.greedy:
+        if self.hparams['greedy']:
             action = greedy_action
         else:
+            assert greedy_action.size() == eps.size()
             random_action = legal_move.multinomial(1).squeeze(1)
             rand = torch.rand(greedy_action.size(), device=greedy_action.device)
-            assert rand.size() == eps.size()
-            rand = (rand < eps).float()
-            action = (greedy_action * (1 - rand) + random_action * rand).detach().long()
+            action = torch.where(rand < eps, random_action, greedy_action).detach().long()
 
-        if self.vdn:
+        if self.hparams['vdn']:
             action = action.view(bsize, num_player)
             greedy_action = greedy_action.view(bsize, num_player)
             # rand = rand.view(bsize, num_player)
@@ -224,10 +337,8 @@ class R2D2Agent(torch.jit.ScriptModule):
         return reply
 
     @torch.jit.script_method
-    def compute_target(
-        self, input_: dict[str, torch.Tensor]
-    ) -> dict[str, torch.Tensor]:
-        assert self.multi_step == 1
+    def compute_target(self, input_: dict[str, torch.Tensor]) -> dict[str, torch.Tensor]:
+        assert self.hparams['multi_step'] == 1
         priv_s = input_["priv_s"]
         publ_s = input_["publ_s"]
         legal_move = input_["legal_move"]
@@ -242,7 +353,7 @@ class R2D2Agent(torch.jit.ScriptModule):
         reward = input_["reward"]
         terminal = input_["terminal"]
 
-        if self.boltzmann:
+        if self.hparams['boltzmann']:
             temp = input_["temperature"].flatten(0, 1)
             next_a, _, next_pa = self.boltzmann_act(
                 priv_s, publ_s, legal_move, temp, act_hid
@@ -254,14 +365,12 @@ class R2D2Agent(torch.jit.ScriptModule):
             qa = self.target_net(priv_s, publ_s, legal_move, next_a, fwd_hid)[0]
 
         assert reward.size() == qa.size()
-        target = reward + (1 - terminal) * self.gamma * qa
+        target = reward + (1 - terminal) * self.hparams['gamma'] * qa
         return {"target": target.detach()}
 
     @torch.jit.script_method
-    def compute_priority(
-        self, input_: dict[str, torch.Tensor]
-    ) -> dict[str, torch.Tensor]:
-        if self.uniform_priority:
+    def compute_priority(self, input_: dict[str, torch.Tensor]) -> dict[str, torch.Tensor]:
+        if self.hparams['uniform_priority']:
             return {"priority": torch.ones_like(input_["reward"].sum(1))}
 
         # swap batch_dim and seq_dim
@@ -274,10 +383,10 @@ class R2D2Agent(torch.jit.ScriptModule):
             "publ_s": input_["publ_s"],
             "legal_move": input_["legal_move"],
         }
-        if self.boltzmann:
+        if self.hparams['boltzmann']:
             obs["temperature"] = input_["temperature"]
 
-        if self.off_belief:
+        if self.hparams['off_belief']:
             obs["target"] = input_["target"]
 
         hid = {"h0": input_["h0"], "c0": input_["c0"]}
@@ -314,7 +423,7 @@ class R2D2Agent(torch.jit.ScriptModule):
             hid[k] = v.flatten(1, 2).contiguous()
 
         bsize, num_player = priv_s.size(1), 1
-        if self.vdn:
+        if self.hparams['vdn']:
             num_player = priv_s.size(2)
             priv_s = priv_s.flatten(1, 2)
             publ_s = publ_s.flatten(1, 2)
@@ -327,28 +436,28 @@ class R2D2Agent(torch.jit.ScriptModule):
             priv_s, publ_s, legal_move, action, hid
         )
 
-        if self.off_belief:
+        if self.hparams['off_belief']:
             target = obs["target"]
         else:
             target_qa, _, target_q, _ = self.target_net(
                 priv_s, publ_s, legal_move, greedy_a, hid
             )
 
-            if self.boltzmann:
+            if self.hparams['boltzmann']:
                 temperature = obs["temperature"].flatten(1, 2).unsqueeze(2)
                 # online_q: [seq_len, bathc * num_player, num_action]
                 logit = online_q / temperature.clamp(min=1e-6)
                 # logit: [seq_len, batch * num_player, num_action]
                 legal_logit = logit - (1 - legal_move) * 1e30
                 assert legal_logit.dim() == 3
-                pa = nn.functional.softmax(legal_logit, 2).detach()
+                pa = F.softmax(legal_logit, 2).detach()
                 # pa: [seq_len, batch * num_player, num_action]
 
                 assert target_q.size() == pa.size()
                 target_qa = (pa * target_q).sum(-1).detach()
                 assert online_qa.size() == target_qa.size()
 
-            if self.vdn:
+            if self.hparams['vdn']:
                 online_qa = online_qa.view(max_seq_len, bsize, num_player).sum(-1)
                 target_qa = target_qa.view(max_seq_len, bsize, num_player).sum(-1)
                 lstm_o = lstm_o.view(max_seq_len, bsize, num_player, -1)
@@ -407,7 +516,7 @@ class R2D2Agent(torch.jit.ScriptModule):
             batch.bootstrap,
             batch.seq_len,
         )
-        rl_loss = nn.functional.smooth_l1_loss(
+        rl_loss = F.smooth_l1_loss(
             err, torch.zeros_like(err), reduction="none"
         )
         rl_loss = rl_loss.sum(0)
@@ -458,12 +567,12 @@ class R2D2Agent(torch.jit.ScriptModule):
         with torch.no_grad():
             target_logit, _ = clone_bot(priv_s, publ_s, None)
             target_logit = target_logit - (1 - legal_move) * 1e10
-            target = nn.functional.softmax(target_logit, 2)
+            target = F.softmax(target_logit, 2)
 
         logit = online_q / t
         # logit: [seq_len, batch * num_player, num_action]
         legal_logit = logit - (1 - legal_move) * 1e10
-        log_distq = nn.functional.log_softmax(legal_logit, 2)
+        log_distq = F.log_softmax(legal_logit, 2)
 
         assert log_distq.size() == target.size()
         assert log_distq.size() == legal_move.size()

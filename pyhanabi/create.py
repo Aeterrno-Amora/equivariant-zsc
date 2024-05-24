@@ -8,37 +8,30 @@ import set_path
 
 set_path.append_sys_path()
 
+from common_utils.hparams import hparams
 import rela
 import hanalearn
 
 assert rela.__file__.endswith(".so")
 assert hanalearn.__file__.endswith(".so")
 
-
-def create_envs(
-    num_env,
-    seed,
-    num_player,
-    bomb,
-    max_len,
-    *,
-    hand_size=5,
-    random_start_player=1,
-):
+def create_envs(num_env, num_player=None, bomb=None, seed=None):
+    if  num_player is None:
+        num_player = hparams['num_player']
+    if  bomb is None:
+        bomb = hparams['bomb']
+    if  seed is None:
+        seed = hparams['seed']
     games = []
     for game_idx in range(num_env):
         params = {
-            "players": str(num_player),
-            "seed": str(seed + game_idx),
+            "players": str(hparams['num_player']),
+            "seed": str(hparams['seed'] + game_idx),
             "bomb": str(bomb),
-            "hand_size": str(hand_size),
-            "random_start_player": str(random_start_player),
+            "hand_size": str(hparams['hand_size']),
+            "random_start_player": str(hparams['random_start_player']),
         }
-        game = hanalearn.HanabiEnv(
-            params,
-            max_len,
-            False,
-        )
+        game = hanalearn.HanabiEnv(params, hparams['max_len'], False)
         games.append(game)
     return games
 
