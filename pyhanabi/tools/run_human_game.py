@@ -129,18 +129,18 @@ def run_game(game, max_len, f=None):
         if move.type == "hintValue":
             target_offset = (move.target_player - cur_player + num_player) % num_player
             move = hanalearn.HanabiMove(
-                hanalearn.MoveType.RevealRank, -1, target_offset, -1, move.value - 1
+                hanalearn.HanabiMove.Type.RevealRank, -1, target_offset, -1, move.value - 1
             )
         elif move.type == "hintColor":
             target_offset = (move.target_player - cur_player + num_player) % num_player
             move = hanalearn.HanabiMove(
-                hanalearn.MoveType.RevealColor, -1, target_offset, move.value - 1, -1
+                hanalearn.HanabiMove.Type.RevealColor, -1, target_offset, move.value - 1, -1
             )
         elif move.type == "playCard":
-            move = hanalearn.HanabiMove(hanalearn.MoveType.Play, move.value, -1, -1, -1)
+            move = hanalearn.HanabiMove(hanalearn.HanabiMove.Type.Play, move.value, -1, -1, -1)
         elif move.type == "discardCard":
             move = hanalearn.HanabiMove(
-                hanalearn.MoveType.Discard, move.value, -1, -1, -1
+                hanalearn.HanabiMove.Type.Discard, move.value, -1, -1, -1
             )
         else:
             logging.error(f"Unknown or illegal move in {debug_label}: {move}")

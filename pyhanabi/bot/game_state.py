@@ -71,7 +71,7 @@ class Hand:
         assert len(self.cards) < self.hand_size
         self.cards.append(card)
         self.hle_hand.add_card(
-            card.hle_card, hle.CardKnowledge(self.num_color, self.num_rank)
+            card.hle_card, hle.HanabiHand.CardKnowledge(self.num_color, self.num_rank)
         )
 
     def remove_from_hand(self, order):
@@ -127,7 +127,7 @@ class HleGameState:
             return
 
         self.hands[player].add_card(Card(color, rank, order))
-        move = hle.HanabiMove(hle.MoveType.Deal, -1, -1, color, rank-1)
+        move = hle.HanabiMove(hle.HanabiMove.Type.Deal, -1, -1, color, rank-1)
 
         self.hle_state.apply_move(move)
 
@@ -141,7 +141,7 @@ class HleGameState:
         removed, card_idx = self.hands[seat].remove_from_hand(order)
         assert removed.order == order
 
-        move = hle.HanabiMove(hle.MoveType.Play, card_idx, -1, -1, -1)
+        move = hle.HanabiMove(hle.HanabiMove.Type.Play, card_idx, -1, -1, -1)
         self.hle_state.apply_move(move)
 
     def discard(self, seat, color, rank, order):
@@ -149,7 +149,7 @@ class HleGameState:
         removed, card_idx = self.hands[seat].remove_from_hand(order)
         assert removed.order == order
 
-        move = hle.HanabiMove(hle.MoveType.Discard, card_idx, -1, -1, -1)
+        move = hle.HanabiMove(hle.HanabiMove.Type.Discard, card_idx, -1, -1, -1)
         self.hle_state.apply_move(move)
 
     def hint(self, giver, target, hint_type, hint_value, hinted_card_orders):
@@ -159,9 +159,9 @@ class HleGameState:
         hint_type = ['color_hint', 'rank_hint'][hint_type]
         if hint_type == 'rank_hint':
             hint_value -= 1
-            move = hle.HanabiMove(hle.MoveType.RevealRank, -1, target_offset, -1, hint_value)
+            move = hle.HanabiMove(hle.HanabiMove.Type.RevealRank, -1, target_offset, -1, hint_value)
         else:
-            move = hle.HanabiMove(hle.MoveType.RevealColor, -1, target_offset, hint_value, -1)
+            move = hle.HanabiMove(hle.HanabiMove.Type.RevealColor, -1, target_offset, hint_value, -1)
 
         self.hle_state.apply_move(move)
 
@@ -196,13 +196,13 @@ class HleGameState:
 
     def convert_move(self, hle_move):
         type_map = {
-            hle.MoveType.Play: ACTION.PLAY,
-            hle.MoveType.Discard: ACTION.DISCARD,
-            hle.MoveType.RevealColor: ACTION.COLOR_HINT,
-            hle.MoveType.RevealRank: ACTION.RANK_HINT,
+            hle.HanabiMove.Type.Play: ACTION.PLAY,
+            hle.HanabiMove.Type.Discard: ACTION.DISCARD,
+            hle.HanabiMove.Type.RevealColor: ACTION.COLOR_HINT,
+            hle.HanabiMove.Type.RevealRank: ACTION.RANK_HINT,
         }
 
-        if hle_move.move_type() in [hle.MoveType.Play, hle.MoveType.Discard]:
+        if hle_move.move_type() in [hle.HanabiMove.Type.Play, hle.HanabiMove.Type.Discard]:
             card_idx = hle_move.card_index()
             assert card_idx >= 0 and card_idx < len(self.hands[self.my_index])
             card_order = self.hands[self.my_index].cards[card_idx].order
@@ -212,7 +212,7 @@ class HleGameState:
             }
 
         target_idx = (self.my_index + hle_move.target_offset()) % self.num_player
-        if hle_move.move_type() == hle.MoveType.RevealColor:
+        if hle_move.move_type() == hle.HanabiMove.Type.RevealColor:
             value = hle_move.color()
             assert value >= 0 and value < self.hle_game.num_colors()
         else:

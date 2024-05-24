@@ -72,7 +72,7 @@ def run_game(agents, seed, verbose, op):
         hids = new_hids
         cur_player = game.get_current_player()
         move = game.get_move(actions[-1][cur_player])
-        if op and move.move_type() == hanalearn.MoveType.RevealColor:
+        if op and move.move_type() == hanalearn.HanabiMove.Type.RevealColor:
             move.set_color(inv_color_permutes[cur_player][move.color()])
         moves.append(move)
 

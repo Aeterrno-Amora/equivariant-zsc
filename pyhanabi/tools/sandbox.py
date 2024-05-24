@@ -57,22 +57,22 @@ def _hand_to_str(hand):
 
 def _move_to_str(env, obs, move):
     mt = move.move_type()
-    if mt == hanalearn.MoveType.Play:
+    if mt == hanalearn.HanabiMove.Type.Play:
         pos = move.card_index()
         card = obs.hands()[env.get_current_player()].cards()[pos]
         card_str = _card_to_str(card)
         return f"Play card {card_str} pos {pos}"
-    elif mt == hanalearn.MoveType.Discard:
+    elif mt == hanalearn.HanabiMove.Type.Discard:
         pos = move.card_index()
         card = obs.hands()[env.get_current_player()].cards()[pos]
         card_str = _card_to_str(card)
         return f"Discard card {card_str} pos {pos}"
-    elif mt == hanalearn.MoveType.RevealColor:
+    elif mt == hanalearn.HanabiMove.Type.RevealColor:
         pla = (env.get_current_player() + move.target_offset()) % env.get_num_players()
         color = move.color()
         color_str = color_codes[color] + color_chars[color] + resetcolor
         return f"Hint p{pla} {color_str}"
-    elif mt == hanalearn.MoveType.RevealRank:
+    elif mt == hanalearn.HanabiMove.Type.RevealRank:
         pla = (env.get_current_player() + move.target_offset()) % env.get_num_players()
         rank = move.rank()
         rank_str = str(rank + 1)
