@@ -19,11 +19,10 @@ import set_path
 
 set_path.append_sys_path()
 
-import torch
-import rela
+import rela  # Needed for hanalearn import to work.
 import hanalearn
 import common_utils
-from .extract_human_data import Game, Move, Card
+from .extract_human_data import Card
 
 
 # For the dataset with action durations this was not necessary
@@ -76,12 +75,12 @@ def filter_game(history, num_players, skip_player_name_check=False):
                 hints += 1
         elif move.type == "hintValue":
             hints -= 1
-            other_hand: List[Card] = sim_hands[move.target_player]
+            other_hand: list[Card] = sim_hands[move.target_player]
             if not (move.value in [x.value for x in other_hand]):
                 return False
         elif move.type == "hintColor":
             hints -= 1
-            other_hand: List[Card] = sim_hands[move.target_player]
+            other_hand: list[Card] = sim_hands[move.target_player]
             if not (move.value in [x.color for x in other_hand]):
                 return False
 

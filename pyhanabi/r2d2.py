@@ -4,10 +4,8 @@
 # This source code is licensed under the license found in the
 # LICENSE file in the root directory of this source tree.
 #
-from collections import OrderedDict
 import torch
-import torch.nn as nn
-from typing import Tuple, Dict
+from torch import nn
 from net import FFWDNet, PublicLSTMNet, LSTMNet, EquivariantLSTMNet, EquivariantPublicLSTMNet
 
 
@@ -106,7 +104,7 @@ class R2D2Agent(torch.jit.ScriptModule):
         self.max_len = max_len
 
     @torch.jit.script_method
-    def get_h0(self, batchsize: int) -> Dict[str, torch.Tensor]:
+    def get_h0(self, batchsize: int) -> dict[str, torch.Tensor]:
         return self.online_net.get_h0(batchsize)
 
     def clone(self, device, overwrite=None):
@@ -145,8 +143,8 @@ class R2D2Agent(torch.jit.ScriptModule):
         priv_s: torch.Tensor,
         publ_s: torch.Tensor,
         legal_move: torch.Tensor,
-        hid: Dict[str, torch.Tensor],
-    ) -> Tuple[torch.Tensor, Dict[str, torch.Tensor]]:
+        hid: dict[str, torch.Tensor],
+    ) -> tuple[torch.Tensor, dict[str, torch.Tensor]]:
         adv, new_hid = self.online_net.act(priv_s, publ_s, hid)
         legal_adv = (1 + adv - adv.min()) * legal_move
         greedy_action = legal_adv.argmax(1).detach()
@@ -159,8 +157,8 @@ class R2D2Agent(torch.jit.ScriptModule):
         publ_s: torch.Tensor,
         legal_move: torch.Tensor,
         temperature: torch.Tensor,
-        hid: Dict[str, torch.Tensor],
-    ) -> Tuple[torch.Tensor, Dict[str, torch.Tensor], torch.Tensor]:
+        hid: dict[str, torch.Tensor],
+    ) -> tuple[torch.Tensor, dict[str, torch.Tensor], torch.Tensor]:
         temperature = temperature.unsqueeze(1)
         adv, new_hid = self.online_net.act(priv_s, publ_s, hid)
         assert adv.dim() == temperature.dim()
@@ -172,7 +170,7 @@ class R2D2Agent(torch.jit.ScriptModule):
         return action, new_hid, prob
 
     @torch.jit.script_method
-    def act(self, obs: Dict[str, torch.Tensor]) -> Dict[str, torch.Tensor]:
+    def act(self, obs: dict[str, torch.Tensor]) -> dict[str, torch.Tensor]:
         """
         Acts on the given obs, with eps-greedy policy.
         output: {'a' : actions}, a long Tensor of shape
@@ -227,8 +225,8 @@ class R2D2Agent(torch.jit.ScriptModule):
 
     @torch.jit.script_method
     def compute_target(
-        self, input_: Dict[str, torch.Tensor]
-    ) -> Dict[str, torch.Tensor]:
+        self, input_: dict[str, torch.Tensor]
+    ) -> dict[str, torch.Tensor]:
         assert self.multi_step == 1
         priv_s = input_["priv_s"]
         publ_s = input_["publ_s"]
@@ -261,8 +259,8 @@ class R2D2Agent(torch.jit.ScriptModule):
 
     @torch.jit.script_method
     def compute_priority(
-        self, input_: Dict[str, torch.Tensor]
-    ) -> Dict[str, torch.Tensor]:
+        self, input_: dict[str, torch.Tensor]
+    ) -> dict[str, torch.Tensor]:
         if self.uniform_priority:
             return {"priority": torch.ones_like(input_["reward"].sum(1))}
 
@@ -298,14 +296,14 @@ class R2D2Agent(torch.jit.ScriptModule):
     @torch.jit.script_method
     def td_error(
         self,
-        obs: Dict[str, torch.Tensor],
-        hid: Dict[str, torch.Tensor],
-        action: Dict[str, torch.Tensor],
+        obs: dict[str, torch.Tensor],
+        hid: dict[str, torch.Tensor],
+        action: dict[str, torch.Tensor],
         reward: torch.Tensor,
         terminal: torch.Tensor,
         bootstrap: torch.Tensor,
         seq_len: torch.Tensor,
-    ) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
+    ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
         max_seq_len = obs["priv_s"].size(0)
         priv_s = obs["priv_s"]
         publ_s = obs["publ_s"]

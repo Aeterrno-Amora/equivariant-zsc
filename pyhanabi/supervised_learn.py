@@ -8,13 +8,10 @@ import argparse
 import os
 import pickle
 import sys
-import getpass
-import random
 import time
 import logging
-import math
-import numpy as np
 import torch
+import torch.nn.functional as F
 import pprint
 
 import set_path
@@ -37,7 +34,7 @@ def compute_loss(pred_logits, legal_move, gt_a, mask):
     pred_logits = pred_logits - (1 - legal_move) * 1e10
     pred_logits = pred_logits.reshape(-1, num_actions)
     gt_a = gt_a.flatten()
-    loss = torch.nn.functional.cross_entropy(pred_logits, gt_a, reduction="none")
+    loss = F.cross_entropy(pred_logits, gt_a, reduction="none")
     loss = loss.view(seq_len, bsize)
     loss = (loss * mask).sum(0).mean()
     return loss

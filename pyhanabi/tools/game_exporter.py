@@ -4,7 +4,6 @@
 # This source code is licensed under the license found in the
 # LICENSE file in the root directory of this source tree.
 #
-from typing import Dict, List
 import json
 import set_path
 
@@ -18,7 +17,7 @@ import hanalearn
 COLORS = "abcde"
 
 
-def export_game(env: hanalearn.HanabiEnv, moves: List[int]) -> Dict:
+def export_game(env: hanalearn.HanabiEnv, moves: list[int]) -> dict:
     num_players = 2
     game_json = {}
 

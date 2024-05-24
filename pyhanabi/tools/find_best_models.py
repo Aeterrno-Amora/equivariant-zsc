@@ -4,10 +4,8 @@
 # This source code is licensed under the license found in the
 # LICENSE file in the root directory of this source tree.
 #
-import argparse
 import os
 import sys
-import pprint
 import json
 from collections import defaultdict
 import numpy as np
@@ -16,7 +14,6 @@ lib_path = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.append(lib_path)
 from eval import evaluate_saved_model
 import common_utils
-import utils
 
 
 def find_best_models(

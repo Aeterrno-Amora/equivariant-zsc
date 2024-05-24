@@ -10,7 +10,6 @@ import random
 import numpy as np
 import torch
 from torch import nn
-from typing import Dict
 
 
 def to_device(data, device):

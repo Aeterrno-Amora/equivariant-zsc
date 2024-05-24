@@ -5,8 +5,8 @@
 # LICENSE file in the root directory of this source tree.
 #
 import torch
-import torch.nn as nn
-from typing import Dict, Optional, Tuple
+from torch import nn
+from typing import Optional
 
 
 class LSTMNet(torch.jit.ScriptModule):
@@ -37,8 +37,8 @@ class LSTMNet(torch.jit.ScriptModule):
         self,
         priv_s: torch.Tensor,
         publ_s: torch.Tensor,
-        hid: Optional[Dict[str, torch.Tensor]] = None,
-    ) -> Tuple[torch.Tensor, Dict[str, torch.Tensor]]:
+        hid: Optional[dict[str, torch.Tensor]] = None,
+    ) -> tuple[torch.Tensor, dict[str, torch.Tensor]]:
         x = self.net(priv_s)
 
         if hid is not None:
@@ -102,8 +102,8 @@ class PublicLSTMNet(torch.jit.ScriptModule):
         self,
         priv_s: torch.Tensor,
         publ_s: torch.Tensor,
-        hid: Optional[Dict[str, torch.Tensor]] = None,
-    ) -> Tuple[torch.Tensor, Dict[str, torch.Tensor]]:
+        hid: Optional[dict[str, torch.Tensor]] = None,
+    ) -> tuple[torch.Tensor, dict[str, torch.Tensor]]:
         x = self.publ_net(publ_s)
 
         if hid is not None:
@@ -184,8 +184,8 @@ class SupervisedAgent(torch.jit.ScriptModule):
         self,
         priv_s: torch.Tensor,
         publ_s: torch.Tensor,
-        hid: Optional[Dict[str, torch.Tensor]] = None,
-    ) -> Tuple[torch.Tensor, Dict[str, torch.Tensor]]:
+        hid: Optional[dict[str, torch.Tensor]] = None,
+    ) -> tuple[torch.Tensor, dict[str, torch.Tensor]]:
         return self.net(priv_s, publ_s, hid)
 
     def greedy_act(
@@ -193,8 +193,8 @@ class SupervisedAgent(torch.jit.ScriptModule):
         priv_s: torch.Tensor,  # [batchsize, dim]
         publ_s: torch.Tensor,  # [batchsize, dim]
         legal_move: torch.Tensor,  # batchsize, dim]
-        hid: Dict[str, torch.Tensor],  # [num_layer, batchsize, dim]
-    ) -> Tuple[torch.Tensor, Dict[str, torch.Tensor]]:
+        hid: dict[str, torch.Tensor],  # [num_layer, batchsize, dim]
+    ) -> tuple[torch.Tensor, dict[str, torch.Tensor]]:
         """greedy act for 1 timestep"""
         priv_s = priv_s.unsqueeze(0)  # add time dim
         publ_s = publ_s.unsqueeze(0)
@@ -206,7 +206,7 @@ class SupervisedAgent(torch.jit.ScriptModule):
         return action, new_hid
 
     @torch.jit.script_method
-    def act(self, obs: Dict[str, torch.Tensor]) -> Dict[str, torch.Tensor]:
+    def act(self, obs: dict[str, torch.Tensor]) -> dict[str, torch.Tensor]:
         bsize, dim = obs["priv_s"].size()
 
         priv_s = obs["priv_s"]
@@ -223,7 +223,7 @@ class SupervisedAgent(torch.jit.ScriptModule):
         legal_logit = logit - (1 - legal_move) * 1e6
         action = legal_logit.max(1)[1]
         # sample with temp=1
-        # action = nn.functional.softmax(legal_logit, 1)
+        # action = F.softmax(legal_logit, 1)
         # action = action.multinomial(1)
 
         hid_shape = (
@@ -243,8 +243,8 @@ class SupervisedAgent(torch.jit.ScriptModule):
 
     @torch.jit.script_method
     def compute_priority(
-        self, input_: Dict[str, torch.Tensor]
-    ) -> Dict[str, torch.Tensor]:
+        self, input_: dict[str, torch.Tensor]
+    ) -> dict[str, torch.Tensor]:
         """for use in belief training"""
         return {"priority": torch.ones_like(input_["reward"].sum(1))}
 

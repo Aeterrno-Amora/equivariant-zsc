@@ -7,11 +7,9 @@ sys.path.append(os.path.join(root, 'pyhanabi'))
 from set_path import append_sys_path
 append_sys_path()
 
-import torch
 import rela
 import hanalearn
 
-import r2d2
 from belief_model import ARBeliefModel
 from utils import load_agent, load_supervised_agent
 from game_state import HleGameState
@@ -55,8 +53,8 @@ class RLAgent(Agent):
             move = state.hle_game.get_move(action_uid)
 
             # legal_adv = adv - (1 - legal_move) * 1e9
-            # prob = torch.nn.functional.softmax(legal_adv * 5, 1)
-            # logp = torch.nn.functional.log_softmax(legal_adv * 5, 1)
+            # prob = F.softmax(legal_adv * 5, 1)
+            # logp = F.log_softmax(legal_adv * 5, 1)
             # xent = -(prob * logp).sum().item()
         return move, new_hid
 

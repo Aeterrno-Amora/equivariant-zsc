@@ -4,11 +4,8 @@
 # This source code is licensed under the license found in the
 # LICENSE file in the root directory of this source tree.
 #
-from collections import OrderedDict
 import torch
-import torch.nn as nn
-from typing import Tuple, Dict
-import common_utils
+from torch import nn
 import utils
 
 
@@ -44,15 +41,15 @@ class LegacyNet(torch.jit.ScriptModule):
         self.pred = nn.Linear(hid_dim, 5 * 3)
 
     @torch.jit.script_method
-    def get_h0(self, batchsize: int) -> Dict[str, torch.Tensor]:
+    def get_h0(self, batchsize: int) -> dict[str, torch.Tensor]:
         shape = (self.num_lstm_layer, batchsize, self.hid_dim)
         hid = {"h0": torch.zeros(*shape), "c0": torch.zeros(*shape)}
         return hid
 
     @torch.jit.script_method
     def act(
-        self, s: torch.Tensor, hid: Dict[str, torch.Tensor]
-    ) -> Tuple[torch.Tensor, Dict[str, torch.Tensor]]:
+        self, s: torch.Tensor, hid: dict[str, torch.Tensor]
+    ) -> tuple[torch.Tensor, dict[str, torch.Tensor]]:
         s = s.unsqueeze(0)
         x = self.net(s)
         o, (h, c) = self.lstm(x, (hid["h0"], hid["c0"]))
@@ -73,7 +70,7 @@ class LegacyAgent(torch.jit.ScriptModule):
         ).to(device)
 
     @torch.jit.script_method
-    def get_h0(self, batchsize: int) -> Dict[str, torch.Tensor]:
+    def get_h0(self, batchsize: int) -> dict[str, torch.Tensor]:
         return self.online_net.get_h0(batchsize)
 
     def clone(self, device, overwrite=None):
@@ -95,15 +92,15 @@ class LegacyAgent(torch.jit.ScriptModule):
         self,
         priv_s: torch.Tensor,
         legal_move: torch.Tensor,
-        hid: Dict[str, torch.Tensor],
-    ) -> Tuple[torch.Tensor, Dict[str, torch.Tensor]]:
+        hid: dict[str, torch.Tensor],
+    ) -> tuple[torch.Tensor, dict[str, torch.Tensor]]:
         adv, new_hid = self.online_net.act(priv_s, hid)
         legal_adv = (1 + adv - adv.min()) * legal_move
         greedy_action = legal_adv.argmax(1).detach()
         return greedy_action, new_hid  # , pred_t
 
     @torch.jit.script_method
-    def act(self, obs: Dict[str, torch.Tensor]) -> Dict[str, torch.Tensor]:
+    def act(self, obs: dict[str, torch.Tensor]) -> dict[str, torch.Tensor]:
         """
         Acts on the given obs, with eps-greedy policy.
         output: {'a' : actions}, a long Tensor of shape
@@ -164,8 +161,8 @@ class LegacyAgent(torch.jit.ScriptModule):
 
     @torch.jit.script_method
     def compute_priority(
-        self, input_: Dict[str, torch.Tensor]
-    ) -> Dict[str, torch.Tensor]:
+        self, input_: dict[str, torch.Tensor]
+    ) -> dict[str, torch.Tensor]:
         return {"priority": torch.ones_like(input_["reward"].sum(1))}
 
 

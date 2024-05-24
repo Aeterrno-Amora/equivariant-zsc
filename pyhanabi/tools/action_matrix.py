@@ -6,9 +6,6 @@
 #
 import os, sys
 import argparse
-import pprint
-from collections import defaultdict
-import numpy as np
 import matplotlib.pyplot as plt
 
 plt.switch_backend("agg")

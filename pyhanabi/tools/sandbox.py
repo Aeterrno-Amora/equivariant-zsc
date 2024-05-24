@@ -4,13 +4,9 @@
 # This source code is licensed under the license found in the
 # LICENSE file in the root directory of this source tree.
 #
-import argparse
-import getpass
 import os
 import sys
 import pickle
-import logging
-import copy
 
 lib_path = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.append(lib_path)
@@ -18,11 +14,8 @@ import set_path
 
 set_path.append_sys_path()
 
-import torch
 import rela
 import hanalearn
-import common_utils
-from extract_human_data import Game, Move, Card
 
 import run_human_game
 

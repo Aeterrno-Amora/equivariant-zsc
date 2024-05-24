@@ -7,12 +7,11 @@
 """Main DQN agent."""
 import os
 import sys
-from typing import Dict, Tuple
-import pprint
 import argparse
 
 import torch
-import torch.nn as nn
+from torch import nn
+import torch.nn.functional as F
 
 lib_path = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.append(lib_path)
@@ -62,7 +61,7 @@ class LSTMNet(torch.jit.ScriptModule):
         self.fc_a = nn.Linear(self.hid_dim, self.out_dim)
 
     @torch.jit.script_method
-    def forward(self, obs: Dict[str, torch.Tensor]) -> Dict[str, torch.Tensor]:
+    def forward(self, obs: dict[str, torch.Tensor]) -> dict[str, torch.Tensor]:
         h0 = obs["h0"].transpose(0, 1).contiguous()
         c0 = obs["c0"].transpose(0, 1).contiguous()
 
@@ -130,7 +129,7 @@ class ARBeliefNet(torch.jit.ScriptModule):
         self.fc = nn.Linear(self.hid_dim, self.out_dim)
 
     @torch.jit.script_method
-    def forward(self, obs: Dict[str, torch.Tensor]) -> Dict[str, torch.Tensor]:
+    def forward(self, obs: dict[str, torch.Tensor]) -> dict[str, torch.Tensor]:
         # print(">>>>> called: with", obs["num_samples"])
         # print(">>>s: ", batch.obs["s"].size())
         # print(">>>t: ", batch.obs["own_hand"].size())
@@ -181,7 +180,7 @@ class ARBeliefNet(torch.jit.ScriptModule):
             ar_out, ar_hid = self.auto_regress(ar_in, ar_hid)
             logit = self.fc(ar_out.squeeze(1))
             # print(">>>>>logit:", logit.size())
-            prob = nn.functional.softmax(logit, 1)
+            prob = F.softmax(logit, 1)
             # print(prob[0])
             sample_t = prob.multinomial(1)
             # print(prob[:, :5])
@@ -215,19 +214,19 @@ class V0BeliefNet(torch.jit.ScriptModule):
         self.bit_per_card = 25
 
     @torch.jit.script_method
-    def get_h0(self, batchsize: int) -> Dict[str, torch.Tensor]:
+    def get_h0(self, batchsize: int) -> dict[str, torch.Tensor]:
         """dummy function"""
         shape = (1, batchsize, 1)
         hid = {"h0": torch.zeros(*shape), "c0": torch.zeros(*shape)}
         return hid
 
     # @torch.jit.script_method
-    # def forward(self, obs : Dict[str, torch.Tensor]) -> Dict[str, torch.Tensor]:
+    # def forward(self, obs : dict[str, torch.Tensor]) -> dict[str, torch.Tensor]:
     #     # print("observe")
     #     return obs
 
     @torch.jit.script_method
-    def forward(self, obs: Dict[str, torch.Tensor]) -> Dict[str, torch.Tensor]:
+    def forward(self, obs: dict[str, torch.Tensor]) -> dict[str, torch.Tensor]:
         if obs["num_samples"].sum() == 0:
             print("<<<forward>>> belief model, bsize: ", obs["num_samples"].size(0))
             # forward the model, do not sample

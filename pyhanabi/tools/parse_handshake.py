@@ -4,14 +4,9 @@
 # This source code is licensed under the license found in the
 # LICENSE file in the root directory of this source tree.
 #
-import argparse
 import os
 import sys
-import pprint
-from collections import defaultdict
-import json
 import numpy as np
-import torch
 import time
 
 import matplotlib.pyplot as plt
@@ -23,9 +18,7 @@ sys.path.append(lib_path)
 
 from create import *
 import utils
-import common_utils
 import rela
-import r2d2
 import model_zoo
 
 

@@ -16,7 +16,6 @@ import torch
 
 from act_group import ActGroup
 from create import create_envs, create_threads
-import r2d2
 import common_utils
 import rela
 import utils

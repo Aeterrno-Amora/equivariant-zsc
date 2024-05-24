@@ -12,7 +12,6 @@ import pprint
 
 import numpy as np
 import torch
-from torch import nn
 
 from act_group import ActGroup
 from create import create_envs, create_threads

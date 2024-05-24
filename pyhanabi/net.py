@@ -4,13 +4,9 @@
 # This source code is licensed under the license found in the
 # LICENSE file in the root directory of this source tree.
 #
-from collections import OrderedDict
 import torch
-import torch.nn as nn
-from typing import Tuple, Dict, Optional
+from torch import nn
 from itertools import permutations
-import common_utils
-import math
 
 
 @torch.jit.script
@@ -75,7 +71,7 @@ class FFWDNet(torch.jit.ScriptModule):
         self.pred_1st = nn.Linear(self.hid_dim, 5 * 3)
 
     @torch.jit.script_method
-    def get_h0(self, batchsize: int) -> Dict[str, torch.Tensor]:
+    def get_h0(self, batchsize: int) -> dict[str, torch.Tensor]:
         """fake, only for compatibility"""
         shape = (1, batchsize, 1)
         hid = {"h0": torch.zeros(*shape), "c0": torch.zeros(*shape)}
@@ -83,8 +79,8 @@ class FFWDNet(torch.jit.ScriptModule):
 
     @torch.jit.script_method
     def act(
-        self, priv_s: torch.Tensor, publ_s: torch.Tensor, hid: Dict[str, torch.Tensor]
-    ) -> Tuple[torch.Tensor, Dict[str, torch.Tensor]]:
+        self, priv_s: torch.Tensor, publ_s: torch.Tensor, hid: dict[str, torch.Tensor]
+    ) -> tuple[torch.Tensor, dict[str, torch.Tensor]]:
         assert priv_s.dim() == 2, "dim should be 2, [batch, dim], get %d" % priv_s.dim()
         o = self.net(priv_s)
         a = self.fc_a(o)
@@ -97,8 +93,8 @@ class FFWDNet(torch.jit.ScriptModule):
         publ_s: torch.Tensor,
         legal_move: torch.Tensor,
         action: torch.Tensor,
-        hid: Dict[str, torch.Tensor],
-    ) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
+        hid: dict[str, torch.Tensor],
+    ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
         assert (
             priv_s.dim() == 3 or priv_s.dim() == 2
         ), "dim = 3/2, [seq_len(optional), batch, dim]"
@@ -163,7 +159,7 @@ class LSTMNet(torch.jit.ScriptModule):
         self.pred_1st = nn.Linear(self.hid_dim, 5 * 3)
 
     @torch.jit.script_method
-    def get_h0(self, batchsize: int) -> Dict[str, torch.Tensor]:
+    def get_h0(self, batchsize: int) -> dict[str, torch.Tensor]:
         shape = (self.num_lstm_layer, batchsize, self.hid_dim)
         hid = {"h0": torch.zeros(*shape), "c0": torch.zeros(*shape)}
         return hid
@@ -173,8 +169,8 @@ class LSTMNet(torch.jit.ScriptModule):
         self,
         priv_s: torch.Tensor,
         publ_s: torch.Tensor,
-        hid: Dict[str, torch.Tensor],
-    ) -> Tuple[torch.Tensor, Dict[str, torch.Tensor]]:
+        hid: dict[str, torch.Tensor],
+    ) -> tuple[torch.Tensor, dict[str, torch.Tensor]]:
         assert priv_s.dim() == 2
         bsize = hid["h0"].size(0)
         assert hid["h0"].dim() == 4
@@ -213,8 +209,8 @@ class LSTMNet(torch.jit.ScriptModule):
         publ_s: torch.Tensor,
         legal_move: torch.Tensor,
         action: torch.Tensor,
-        hid: Dict[str, torch.Tensor],
-    ) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
+        hid: dict[str, torch.Tensor],
+    ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
         assert (
             priv_s.dim() == 3 or priv_s.dim() == 2
         ), "dim = 3/2, [seq_len(optional), batch, dim]"
@@ -305,7 +301,7 @@ class PublicLSTMNet(torch.jit.ScriptModule):
         self.pred_1st = nn.Linear(self.hid_dim, 5 * 3)
 
     @torch.jit.script_method
-    def get_h0(self, batchsize: int) -> Dict[str, torch.Tensor]:
+    def get_h0(self, batchsize: int) -> dict[str, torch.Tensor]:
         shape = (self.num_lstm_layer, batchsize, self.hid_dim)
         hid = {"h0": torch.zeros(*shape), "c0": torch.zeros(*shape)}
         return hid
@@ -315,8 +311,8 @@ class PublicLSTMNet(torch.jit.ScriptModule):
         self,
         priv_s: torch.Tensor,
         publ_s: torch.Tensor,
-        hid: Dict[str, torch.Tensor],
-    ) -> Tuple[torch.Tensor, Dict[str, torch.Tensor]]:
+        hid: dict[str, torch.Tensor],
+    ) -> tuple[torch.Tensor, dict[str, torch.Tensor]]:
         assert priv_s.dim() == 2
 
         bsize = hid["h0"].size(0)
@@ -359,8 +355,8 @@ class PublicLSTMNet(torch.jit.ScriptModule):
         publ_s: torch.Tensor,
         legal_move: torch.Tensor,
         action: torch.Tensor,
-        hid: Dict[str, torch.Tensor],
-    ) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
+        hid: dict[str, torch.Tensor],
+    ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
         assert (
             priv_s.dim() == 3 or priv_s.dim() == 2
         ), "dim = 3/2, [seq_len(optional), batch, dim]"
@@ -527,7 +523,7 @@ class EquivariantLSTMNet(torch.jit.ScriptModule):
  
 
     @torch.jit.script_method
-    def get_h0(self, batchsize: int) -> Dict[str, torch.Tensor]:
+    def get_h0(self, batchsize: int) -> dict[str, torch.Tensor]:
         shape = (self.num_lstm_layer, batchsize, self.hid_dim)
         hid = {"h0": torch.zeros(*shape), "c0": torch.zeros(*shape)}
         return hid
@@ -537,8 +533,8 @@ class EquivariantLSTMNet(torch.jit.ScriptModule):
         self,
         priv_s: torch.Tensor,
         publ_s: torch.Tensor,
-        hid: Dict[str, torch.Tensor],
-    ) -> Tuple[torch.Tensor, Dict[str, torch.Tensor]]:
+        hid: dict[str, torch.Tensor],
+    ) -> tuple[torch.Tensor, dict[str, torch.Tensor]]:
         
         assert priv_s.dim() == 2
 
@@ -590,8 +586,8 @@ class EquivariantLSTMNet(torch.jit.ScriptModule):
         publ_s: torch.Tensor,
         legal_move: torch.Tensor,
         action: torch.Tensor,
-        hid: Dict[str, torch.Tensor],
-    ) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
+        hid: dict[str, torch.Tensor],
+    ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
         assert (
             priv_s.dim() == 3 or priv_s.dim() == 2
         ), "dim = 3/2, [seq_len(optional), batch, dim]"
@@ -787,7 +783,7 @@ class EquivariantPublicLSTMNet(torch.jit.ScriptModule):
         
 
     @torch.jit.script_method
-    def get_h0(self, batchsize: int) -> Dict[str, torch.Tensor]:
+    def get_h0(self, batchsize: int) -> dict[str, torch.Tensor]:
         shape = (self.num_lstm_layer, batchsize, self.hid_dim)
         hid = {"h0": torch.zeros(*shape), "c0": torch.zeros(*shape)}
         return hid
@@ -797,8 +793,8 @@ class EquivariantPublicLSTMNet(torch.jit.ScriptModule):
         self,
         priv_s: torch.Tensor,
         publ_s: torch.Tensor,
-        hid: Dict[str, torch.Tensor],
-    ) -> Tuple[torch.Tensor, Dict[str, torch.Tensor]]:
+        hid: dict[str, torch.Tensor],
+    ) -> tuple[torch.Tensor, dict[str, torch.Tensor]]:
         assert priv_s.dim() == 2
 
         bsize = hid["h0"].size(0)
@@ -852,8 +848,8 @@ class EquivariantPublicLSTMNet(torch.jit.ScriptModule):
         publ_s: torch.Tensor,
         legal_move: torch.Tensor,
         action: torch.Tensor,
-        hid: Dict[str, torch.Tensor],
-    ) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
+        hid: dict[str, torch.Tensor],
+    ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
         assert (
             priv_s.dim() == 3 or priv_s.dim() == 2
         ), "dim = 3/2, [seq_len(optional), batch, dim]"

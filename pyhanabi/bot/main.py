@@ -1,4 +1,3 @@
-import os
 import argparse
 import requests
 from hanabi_client import HanabiClient

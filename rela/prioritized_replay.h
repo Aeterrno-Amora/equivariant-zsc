@@ -199,7 +199,7 @@ template <class DataType>
 class PrioritizedReplay {
  public:
   PrioritizedReplay(int capacity, int seed, float alpha, float beta, int prefetch)
-      : alpha_(alpha)  // priority exponent
+      : alpha_(alpha)  // priority exponent, weight = priority**alpha
       , beta_(beta)    // importance sampling exponent
       , prefetch_(prefetch)
       , capacity_(capacity)

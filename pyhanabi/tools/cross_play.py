@@ -17,7 +17,6 @@ lib_path = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.append(lib_path)
 from eval import evaluate_saved_model
 import common_utils
-import utils
 from tools import model_zoo
 
 

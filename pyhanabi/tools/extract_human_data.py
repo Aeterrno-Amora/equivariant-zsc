@@ -8,7 +8,6 @@ import copy
 import json
 import sys
 import pprint
-import glob
 from recordclass import recordclass, asdict
 import tarfile
 import os

@@ -5,7 +5,6 @@
 # LICENSE file in the root directory of this source tree.
 #
 from collections import defaultdict
-from .extract_human_data import Game, Move, Card
 
 color_codes = [
     "\033[31m",

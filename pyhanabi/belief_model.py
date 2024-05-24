@@ -6,8 +6,7 @@
 #
 import torch
 from torch import nn
-from typing import Tuple, Dict
-import numpy as np
+import torch.nn.functional as F
 
 
 class V0BeliefModel(torch.jit.ScriptModule):
@@ -19,19 +18,19 @@ class V0BeliefModel(torch.jit.ScriptModule):
         self.num_sample = num_sample
 
     @torch.jit.script_method
-    def get_h0(self, batchsize: int) -> Dict[str, torch.Tensor]:
+    def get_h0(self, batchsize: int) -> dict[str, torch.Tensor]:
         """dummy function"""
         shape = (1, batchsize, 1)
         hid = {"h0": torch.zeros(*shape), "c0": torch.zeros(*shape)}
         return hid
 
     @torch.jit.script_method
-    def observe(self, obs: Dict[str, torch.Tensor]) -> Dict[str, torch.Tensor]:
+    def observe(self, obs: dict[str, torch.Tensor]) -> dict[str, torch.Tensor]:
         # print("observe")
         return obs
 
     @torch.jit.script_method
-    def sample(self, obs: Dict[str, torch.Tensor]) -> Dict[str, torch.Tensor]:
+    def sample(self, obs: dict[str, torch.Tensor]) -> dict[str, torch.Tensor]:
         # print("sample")
         v0 = obs["v0"]
         bsize = v0.size(0)
@@ -111,7 +110,7 @@ class ARBeliefModel(torch.jit.ScriptModule):
         self.fc = nn.Linear(self.hid_dim, self.out_dim)
 
     @torch.jit.script_method
-    def get_h0(self, batchsize: int) -> Dict[str, torch.Tensor]:
+    def get_h0(self, batchsize: int) -> dict[str, torch.Tensor]:
         shape = (self.num_lstm_layer, batchsize, self.hid_dim)
         hid = {"h0": torch.zeros(*shape), "c0": torch.zeros(*shape)}
         return hid
@@ -154,7 +153,7 @@ class ARBeliefModel(torch.jit.ScriptModule):
     def loss(self, batch, beta=1):
         logit = self.forward(batch.obs[self.input_key], batch.obs[self.ar_input_key])
         logit = logit * beta
-        logp = nn.functional.log_softmax(logit, 3)
+        logp = F.log_softmax(logit, 3)
         gtruth = batch.obs[self.ar_target_key]
         gtruth = gtruth.view(logp.size())
         seq_len = batch.seq_len
@@ -168,7 +167,7 @@ class ARBeliefModel(torch.jit.ScriptModule):
         return xent, avg_xent, avg_xent_v0, nll_per_card
 
     @torch.jit.script_method
-    def observe(self, obs: Dict[str, torch.Tensor]) -> Dict[str, torch.Tensor]:
+    def observe(self, obs: dict[str, torch.Tensor]) -> dict[str, torch.Tensor]:
         bsize, num_lstm_layer, num_player, dim = obs["h0"].size()
         h0 = obs["h0"].transpose(0, 1).flatten(1, 2).contiguous()
         c0 = obs["c0"].transpose(0, 1).flatten(1, 2).contiguous()
@@ -188,7 +187,7 @@ class ARBeliefModel(torch.jit.ScriptModule):
         }
 
     @torch.jit.script_method
-    def sample(self, obs: Dict[str, torch.Tensor]) -> Dict[str, torch.Tensor]:
+    def sample(self, obs: dict[str, torch.Tensor]) -> dict[str, torch.Tensor]:
         bsize, num_lstm_layer, num_player, dim = obs["h0"].size()
         h0 = obs["h0"].transpose(0, 1).flatten(1, 2).contiguous()
         c0 = obs["c0"].transpose(0, 1).flatten(1, 2).contiguous()
@@ -218,7 +217,7 @@ class ARBeliefModel(torch.jit.ScriptModule):
             ar_in = torch.cat([in_t, o], 2).view(bsize * self.num_sample, 1, -1)
             ar_out, ar_hid = self.auto_regress(ar_in, ar_hid)
             logit = self.fc(ar_out.squeeze(1))
-            prob = nn.functional.softmax(logit, 1)
+            prob = F.softmax(logit, 1)
             sample_t = prob.multinomial(1)
             sample_t = sample_t.view(bsize, self.num_sample)
             onehot_sample_t = torch.zeros(

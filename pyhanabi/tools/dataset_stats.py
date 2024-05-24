@@ -15,8 +15,7 @@ import numpy as np
 
 lib_path = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.append(lib_path)
-from common_utils import get_all_files, set_all_seeds
-from extract_human_data import Game, Move, Card
+from common_utils import get_all_files
 import generate_clonebot_dataset as gcd
 
 

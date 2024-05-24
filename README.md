@@ -95,6 +95,8 @@ and IQL.
 Q-network, recurrent DQN training, belief network and training, as well as some tools
 to analyze trained models.
 
+`bot` is the human-ai evaluation using web interface. It may be unsupported in the current brunch.
+
 ## Run the Code
 
 Please refer to the README in pyhanabi for detailed instruction on how to train a model.
