@@ -11,15 +11,7 @@ import torch.nn.functional as F
 
 from common_utils.hparams import hparams
 from common_utils.checkpoint import build_object_from_config
-
-
-def build_priv_in_perms(priv_in_dim, symmetries) -> torch.LongTensor:
-    '''-> Tensor[num_symmetries, priv_in_dim]'''
-    pass
-
-def build_out_perms(out_dim, inv_symmetries) -> torch.LongTensor:
-    '''-> Tensor[num_symmetries, out_dim]'''
-    pass
+from equivariance import build_perms
 
 
 class Model(torch.jit.ScriptModule):
@@ -44,24 +36,25 @@ class Model(torch.jit.ScriptModule):
 
         eqc_group = self.config.get("eqc_group")
         self.eqc = bool(eqc_group)
-        if eqc_group == "cyclic":
-            self.symmetries = torch.tensor([
-                [0,1,2,3,4], [4,0,1,2,3], [3,4,0,1,2], [2,3,4,0,1], [1,2,3,4,0],
-            ])
-        elif eqc_group == "dihedral":
-            self.symmetries = torch.tensor([
-                [0,1,2,3,4], [1,2,3,4,0], [2,3,4,0,1], [3,4,0,1,2], [4,0,1,2,3],
-                [4,3,2,1,0], [3,2,1,0,4], [2,1,0,4,3], [1,0,4,3,2], [0,4,3,2,1],
-            ])
-        elif eqc_group == "symmetric":
-            self.symmetries = torch.tensor(list(permutations(range(5))))
-        elif eqc_group:
-            raise ValueError(f"Unsupported EQC group: {eqc_group}")
-        self.num_symmetries = len(self.symmetries)
-        self.inv_symmetries = torch.argsort(self.symmetries)
-        self.priv_in_perms = build_priv_in_perms(self.config['priv_in_dim'], self.symmetries)
-        self.publ_in_perms = self.priv_in_perms[:, 125:] - 125
-        self.out_perms = build_out_perms(self.config['out_dim'], self.inv_symmetries)
+        if self.eqc:
+            if eqc_group == "cyclic":
+                self.symmetries = torch.tensor([
+                    [0,1,2,3,4], [4,0,1,2,3], [3,4,0,1,2], [2,3,4,0,1], [1,2,3,4,0],
+                ])
+            elif eqc_group == "dihedral":
+                self.symmetries = torch.tensor([
+                    [0,1,2,3,4], [1,2,3,4,0], [2,3,4,0,1], [3,4,0,1,2], [4,0,1,2,3],
+                    [4,3,2,1,0], [3,2,1,0,4], [2,1,0,4,3], [1,0,4,3,2], [0,4,3,2,1],
+                ])
+            elif eqc_group == "symmetric":
+                self.symmetries = torch.tensor(list(permutations(range(5))))
+            else:
+                raise ValueError(f"Unsupported EQC group: {eqc_group}")
+            self.num_symmetries = len(self.symmetries)
+            self.priv_in_perms, self.out_perms = build_perms(
+                self.config['priv_in_dim'], self.config['out_dim'], self.symmetries
+            )
+            self.publ_in_perms = self.priv_in_perms[:, 125:] - 125
 
     @torch.jit.script_method
     def eqc_permute_input(
