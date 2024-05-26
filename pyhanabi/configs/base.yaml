@@ -65,5 +65,7 @@ net:
   num_ff_layer: 1
   num_lstm_layer: 2
   public: True
-  eqc: False
+  group: dihedral
+  eqc: True
+  equivariant: False
 multi_step: 3 # DQN settings

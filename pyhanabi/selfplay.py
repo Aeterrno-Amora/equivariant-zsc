@@ -44,7 +44,6 @@ sys.stdout = common_utils.Logger(logger_path)
 saver = common_utils.TopkSaver(hparams['work_dir'], 5)
 
 common_utils.set_all_seeds(hparams['seed'])
-pprint.pprint(vars(args))
 
 explore_eps = utils.generate_explore_eps(
     hparams['act_base_eps'], hparams['act_eps_alpha'], hparams['num_t']

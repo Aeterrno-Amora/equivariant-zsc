@@ -6,6 +6,7 @@
 #
 import torch
 from torch import nn
+from equivariance import EqLinear, EqLSTM, pack_gset
 
 
 def build_mlp(layer, in_dim, hid_dim, num_layer):
@@ -33,19 +34,26 @@ class LSTMNet(torch.jit.ScriptModule):
 
     def __init__(self,
         priv_in_dim, publ_in_dim, hid_dim, num_lstm_layer, num_ff_layer=1,
-        public=True
+        public=True, equivariant=False, hid_channels=None
     ):
         super().__init__()
+        if equivariant:
+            hid_dim = hid_channels
         self.hid_dim = hid_dim
         self.num_lstm_layer = num_lstm_layer
         self.public = public
+        self.equivariant = equivariant
 
+        layer = EqLinear if equivariant else nn.Linear
         if not self.public:
-            self.priv_net = build_mlp(nn.Linear, priv_in_dim, hid_dim, num_ff_layer)
+            self.priv_net = build_mlp(layer, priv_in_dim, hid_dim, num_ff_layer)
         else:
-            self.priv_net = build_mlp(nn.Linear, priv_in_dim, hid_dim, 3)
-            self.publ_net = build_mlp(nn.Linear, publ_in_dim, hid_dim, num_ff_layer)
-        self.lstm = nn.LSTM(hid_dim, hid_dim, num_layers=num_lstm_layer)
+            self.priv_net = build_mlp(layer, priv_in_dim, hid_dim, 3)
+            self.publ_net = build_mlp(layer, publ_in_dim, hid_dim, num_ff_layer)
+        if equivariant:
+            self.lstm = EqLSTM(5, hid_dim, hid_dim, num_lstm_layer)
+        else:
+            self.lstm = nn.LSTM(hid_dim, hid_dim, num_layers=num_lstm_layer)
         self.lstm.flatten_parameters()
 
     # @torch.jit.script_method
@@ -88,6 +96,9 @@ class LSTMNet(torch.jit.ScriptModule):
         if self.public:
             priv_o = self.priv_net(priv_s)
             o = priv_o * o
+        # o can keep unpacked, but hid should be packed
+        h = torch.stack([pack_gset(x) for x in h], dim=0)
+        c = torch.stack([pack_gset(x) for x in c], dim=0)
 
         # hid size: [num_layer, batch x num_player, dim] -> [batch, num_layer, num_player, dim]
         # batchsize = priv_s.size(-2)

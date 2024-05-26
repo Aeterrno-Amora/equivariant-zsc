@@ -11,7 +11,7 @@ import torch.nn.functional as F
 
 from common_utils.hparams import hparams
 from common_utils.checkpoint import build_object_from_config
-from equivariance import build_perms
+from equivariance import _init_color_indices, build_perms, color_indices, EqLinear, total_size
 
 
 class Model(torch.jit.ScriptModule):
@@ -19,6 +19,48 @@ class Model(torch.jit.ScriptModule):
         super().__init__()
         # for backward compatibility
         self.config = hparams['net']
+
+        if self.config['equivariant']:
+            in_color, in_nocolor, out_color, out_nocolor = _init_color_indices(
+                self.config['priv_in_dim'], self.config['out_dim']
+            )
+            hid_channels = self.config['hid_channels']
+            self.config['hid_dim'] = total_size(5, hid_channels)
+            self.config['priv_in_channels'] = (in_nocolor.size(-1), in_color.size(-1))
+            self.config['publ_in_channels'] = (in_nocolor.size(-1), in_color.size(-1) - 25)
+            self.config['out_channels'] = (out_nocolor.size(-1), out_color.size(-1))
+
+            self.fc_v = EqLinear(5, hid_channels, (1,))
+            self.fc_a = EqLinear(5, hid_channels, self.config['out_channels'])
+            self.pred_1st = EqLinear(5, hid_channels, (5 * 3,)) # not sure
+        else:
+            hid_dim = self.config['hid_dim']
+            self.fc_v = nn.Linear(hid_dim, 1)
+            self.fc_a = nn.Linear(hid_dim, self.config['out_dim'])
+            self.pred_1st = nn.Linear(hid_dim, 5 * 3) # for aux task
+
+        self.eqc = self.config["eqc"]
+        if self.eqc:
+            group = self.config["group"]
+            if group == "cyclic":
+                self.symmetries = torch.tensor([
+                    [0,1,2,3,4], [4,0,1,2,3], [3,4,0,1,2], [2,3,4,0,1], [1,2,3,4,0],
+                ])
+            elif group == "dihedral":
+                self.symmetries = torch.tensor([
+                    [0,1,2,3,4], [1,2,3,4,0], [2,3,4,0,1], [3,4,0,1,2], [4,0,1,2,3],
+                    [4,3,2,1,0], [3,2,1,0,4], [2,1,0,4,3], [1,0,4,3,2], [0,4,3,2,1],
+                ])
+            elif group == "symmetric":
+                self.symmetries = torch.tensor(list(permutations(range(5))))
+            else:
+                raise ValueError(f"Unsupported EQC group: {group}")
+            self.num_symmetries = len(self.symmetries)
+            self.priv_in_perms, self.out_perms = build_perms(
+                self.config['priv_in_dim'], self.config['out_dim'], self.symmetries
+            )
+            self.publ_in_perms = self.priv_in_perms[:, 125:] - 125
+
         self.net = build_object_from_config(self.config, parent_cls=nn.Module)
         # net(
         #   priv_s: Tensor[(seq_len), batch, priv_in_dim]
@@ -28,33 +70,6 @@ class Model(torch.jit.ScriptModule):
         #   o: Tensor[(seq_len), batch, hid_dim]
         #   hid: dict[str, Tensor[batch, num_layer, num_player, hid_dim]]
         # )
-
-        hid_dim = self.config['hid_dim']
-        self.fc_v = nn.Linear(hid_dim, 1)
-        self.fc_a = nn.Linear(hid_dim, self.config['out_dim'])
-        self.pred_1st = nn.Linear(hid_dim, 5 * 3) # for aux task
-
-        eqc_group = self.config.get("eqc_group")
-        self.eqc = bool(eqc_group)
-        if self.eqc:
-            if eqc_group == "cyclic":
-                self.symmetries = torch.tensor([
-                    [0,1,2,3,4], [4,0,1,2,3], [3,4,0,1,2], [2,3,4,0,1], [1,2,3,4,0],
-                ])
-            elif eqc_group == "dihedral":
-                self.symmetries = torch.tensor([
-                    [0,1,2,3,4], [1,2,3,4,0], [2,3,4,0,1], [3,4,0,1,2], [4,0,1,2,3],
-                    [4,3,2,1,0], [3,2,1,0,4], [2,1,0,4,3], [1,0,4,3,2], [0,4,3,2,1],
-                ])
-            elif eqc_group == "symmetric":
-                self.symmetries = torch.tensor(list(permutations(range(5))))
-            else:
-                raise ValueError(f"Unsupported EQC group: {eqc_group}")
-            self.num_symmetries = len(self.symmetries)
-            self.priv_in_perms, self.out_perms = build_perms(
-                self.config['priv_in_dim'], self.config['out_dim'], self.symmetries
-            )
-            self.publ_in_perms = self.priv_in_perms[:, 125:] - 125
 
     @torch.jit.script_method
     def eqc_permute_input(
@@ -95,6 +110,31 @@ class Model(torch.jit.ScriptModule):
         return a, hid
 
     @torch.jit.script_method
+    def equivariant_input(
+        self, priv_s: torch.Tensor, publ_s: torch.Tensor
+    ) -> tuple[torch.Tensor, torch.Tensor]:
+        '''
+        self.equivariant_input(
+            priv_s: Tensor[batch, priv_in_dim],
+            publ_s: Tensor[batch, publ_in_dim],
+        ) -> (priv_s, publ_s)
+        '''
+        in_color, _, in_nocolor, _ = color_indices
+        priv_s = [priv_s[..., in_nocolor], priv_s[..., in_color]]
+        publ_s = [publ_s[..., in_nocolor - 125], publ_s[..., in_color[25:] - 125]]
+        return priv_s, publ_s
+
+    @torch.jit.script_method
+    def equivariant_output(self, a: torch.Tensor) -> torch.Tensor:
+        '''
+        self.equivariant_output(
+            a: list[Tensor[batch, permutation, out_dim]]
+        ) -> a
+        '''
+        a0, a1 = a[0].squeeze(-2), a[1].squeeze(-1)
+        return torch.stack([a0[..., :10], a1, a0[..., 10:]], dim=-1)
+
+    @torch.jit.script_method
     def get_h0(self, batchsize: int) -> dict[str, torch.Tensor]:
         return {}
 
@@ -116,6 +156,8 @@ class Model(torch.jit.ScriptModule):
 
         if self.eqc:
             priv_s, publ_s, hid = self.eqc_permute_input(priv_s, publ_s, hid)
+        elif self.equivariant:
+            priv_s, publ_s = self.equivariant_input(priv_s, publ_s)
 
         # hid: [batch, num_layer, num_player, dim] -> [num_layer, batch x num_player, dim]
         if hid:
@@ -134,6 +176,8 @@ class Model(torch.jit.ScriptModule):
 
         if self.eqc:
             a, hid = self.eqc_symmetrize_output(a, hid)
+        elif self.equivariant:
+            a = self.equivariant_output(a)
 
         return a, hid
 
@@ -167,7 +211,9 @@ class Model(torch.jit.ScriptModule):
         a = self.fc_a(o) # [(seq_len), batch]
         if self.eqc:
             a, hid = self.eqc_symmetrize_output(a, hid)
-        v = self.fc_v(o) # [(seq_len), batch]
+        elif self.equivariant:
+            a = self.equivariant_output(a)
+        v = self.fc_v(o, pack=True) # [(seq_len), batch]
         legal_a = a * legal_move
         q = v + legal_a - legal_a.mean(-1, keepdim=True)
         qa = q.gather(-1, action.unsqueeze(-1)).squeeze(-1)
