@@ -6,19 +6,23 @@
 #
 from itertools import permutations
 import torch
-from torch import nn
+from torch import nn, Tensor
 import torch.nn.functional as F
 
 from common_utils.hparams import hparams
 from common_utils.checkpoint import build_object_from_config
-from equivariance import _init_color_indices, build_perms, EqLinear, total_size
+from equivariance import _init_color_indices, build_perms, pack_gset, unpack_gset, total_size, EqLinear
 
 
 class Model(torch.jit.ScriptModule):
+    __constants__ = ["equivariant", "eqc", "num_lstm_layer", "hid_dim", "out_channels", "num_symmetries"]
+
     def __init__(self, hparams=hparams):
         super().__init__()
         # for backward compatibility
         self.config = hparams['net']
+        self.num_lstm_layer = self.config['num_lstm_layer']
+        self.hid_dim = self.config['hid_dim']
 
         self.color_indices = _init_color_indices(
             self.config['priv_in_dim'], self.config['out_dim']
@@ -31,15 +35,15 @@ class Model(torch.jit.ScriptModule):
             self.config['priv_in_channels'] = (in_nocolor.size(-1), in_color.size(-1))
             self.config['publ_in_channels'] = (in_nocolor.size(-1), in_color.size(-1) - 25)
             self.config['out_channels'] = (out_nocolor.size(-1), out_color.size(-1))
+            self.out_channels = self.config['out_channels']
 
-            self.fc_v = EqLinear(5, hid_channels, (1,))
-            self.fc_a = EqLinear(5, hid_channels, self.config['out_channels'])
-            self.pred_1st = EqLinear(5, hid_channels, (5 * 3,)) # not sure
+            self.fc_v = EqLinear(hid_channels, (1,))
+            self.fc_a = EqLinear(hid_channels, self.config['out_channels'])
+            self.pred_1st = EqLinear(hid_channels, (5 * 3,)) # not sure
         else:
-            hid_dim = self.config['hid_dim']
-            self.fc_v = nn.Linear(hid_dim, 1)
-            self.fc_a = nn.Linear(hid_dim, self.config['out_dim'])
-            self.pred_1st = nn.Linear(hid_dim, 5 * 3) # for aux task
+            self.fc_v = nn.Linear(self.hid_dim, 1)
+            self.fc_a = nn.Linear(self.hid_dim, self.config['out_dim'])
+            self.pred_1st = nn.Linear(self.hid_dim, 5 * 3) # for aux task
 
         self.eqc = self.config["eqc"]
         if self.eqc:
@@ -64,8 +68,6 @@ class Model(torch.jit.ScriptModule):
             self.publ_in_perms = self.priv_in_perms[:, 125:] - 125
 
         self.net = build_object_from_config(self.config, parent_cls=nn.Module)
-        print(self.config)
-        print(type(self.net))
         # net(
         #   priv_s: Tensor[(seq_len), batch, priv_in_dim]
         #   publ_s: Tensor[(seq_len), batch, publ_in_dim]
@@ -76,84 +78,79 @@ class Model(torch.jit.ScriptModule):
         # )
 
     @torch.jit.script_method
-    def eqc_permute_input(
-        self, priv_s: torch.Tensor, publ_s: torch.Tensor, hid: dict[str, torch.Tensor]
-    ) -> tuple[torch.Tensor, torch.Tensor, dict[str, torch.Tensor]]:
+    def permute_input(
+        self, priv_s: Tensor, publ_s: Tensor, hid: dict[str, Tensor]
+    ) -> tuple[Tensor, Tensor, dict[str, Tensor]]:
         '''
         self.permute_input(
             priv_s: Tensor[(seq_len), batch, priv_in_dim],
             publ_s: Tensor[(seq_len), batch, publ_in_dim],
             hid: dict[str, Tensor[batch, num_layer, num_player, hid_dim]],
         ) -> (priv_s, publ_s, hid)
-            with batch expanded to batch * num_symmetries
-        using index arrays
-            self.priv_in_perms: LongTensor[num_symmetries, priv_in_dim]
-            self.publ_in_perms: LongTensor[num_symmetries, publ_in_dim]
+        EQC:
+            expand batch to batch * num_symmetries
+            using index arrays
+                self.priv_in_perms: LongTensor[num_symmetries, priv_in_dim]
+                self.publ_in_perms: LongTensor[num_symmetries, publ_in_dim]
+        equivariant:
+            rearrange according to self.color_indices
         '''
-        if priv_s.dim() == 2: # jit doesn't support ... followed by tensor indexing
-            priv_s = priv_s[:, self.priv_in_perms].flatten(-2, -3)
-            publ_s = publ_s[:, self.publ_in_perms].flatten(-2, -3)
-        else:
-            priv_s = priv_s[:, :, self.priv_in_perms].flatten(-3, -4)
-            publ_s = publ_s[:, :, self.publ_in_perms].flatten(-3, -4)
-        hid = {k: v.tile(self.num_symmetries, 1, 1, 1) for k, v in hid.items()}
+        if self.eqc:
+            if priv_s.dim() == 2: # jit doesn't support ... followed by tensor indexing
+                priv_s = priv_s[:, self.priv_in_perms].flatten(-2, -3)
+                publ_s = publ_s[:, self.publ_in_perms].flatten(-2, -3)
+            else:
+                priv_s = priv_s[:, :, self.priv_in_perms].flatten(-3, -4)
+                publ_s = publ_s[:, :, self.publ_in_perms].flatten(-3, -4)
+            hid = {k: v.tile(self.num_symmetries, 1, 1, 1) for k, v in hid.items()}
+        elif self.equivariant:
+            in_color, _, in_nocolor, _ = self.color_indices
+            if priv_s.dim() == 2: # jit doesn't support ... followed by tensor indexing
+                unpacked_priv_s = [priv_s[:, in_nocolor], priv_s[:, in_color]]
+                unpacked_publ_s = [publ_s[:, in_nocolor - 125], publ_s[:, in_color[25:] - 125]]
+            else:
+                unpacked_priv_s = [priv_s[:, :, in_nocolor], priv_s[:, :, in_color]]
+                unpacked_publ_s = [publ_s[:, :, in_nocolor - 125], publ_s[:, :, in_color[25:] - 125]]
+            priv_s, publ_s = pack_gset(unpacked_priv_s), pack_gset(unpacked_publ_s)
         return priv_s, publ_s, hid
 
     @torch.jit.script_method
-    def eqc_symmetrize_output(
-        self, a: torch.Tensor, hid: dict[str, torch.Tensor]
-    ) -> tuple[torch.Tensor, dict[str, torch.Tensor]]:
+    def permute_output(
+        self, a: Tensor, hid: dict[str, Tensor]
+    ) -> tuple[Tensor, dict[str, Tensor]]:
         '''
         self.symmetrize_output(
             a: Tensor[(seq_len), batch * num_symmetries, out_dim],
             hid: dict[str, Tensor[batch * num_symmetries, num_layer, num_player, hid_dim]],
-        ) -> (a, hid)
-            with batch * num_symmetries aggregated to batch
-        using
-            self.out_perms: LongTensor[num_symmetries, out_dim]
+        ) -> (a, hid) 
+        EQC:
+            aggregated batch * num_symmetries to batch
+            using index array
+                self.out_perms: LongTensor[num_symmetries, out_dim]
+        equivariant:
+            rearrange according to self.color_indices
         '''
-        a = a.view(*a.shape[:-2], -1, self.num_symmetries, a.size(-1))
-        a = a.gather(-1, self.out_perms.expand_as(a)).mean(-2)
-        hid = {k: v.view(-1, self.num_symmetries, *v.size()[1:]).mean(1) for k, v in hid.items()}
+        if self.eqc:
+            if a.dim() == 2:
+                a = a.view(-1, self.num_symmetries, a.size(-1))
+            else:
+                a = a.view(a.size(0), -1, self.num_symmetries, a.size(-1))
+            a = a.gather(-1, self.out_perms.expand_as(a)).mean(-2)
+            hid = {k: v.view(-1, self.num_symmetries, v.size(1), v.size(2), v.size(3)).mean(1) for k, v in hid.items()}
+        elif self.equivariant:
+            a0, a1 = unpack_gset(a, 5, self.out_channels)
+            a0, a1 = a0.squeeze(-2), a1.squeeze(-1)
+            a = torch.cat([a0[..., :10], a1, a0[..., 10:]], dim=-1)
         return a, hid
 
     @torch.jit.script_method
-    def equivariant_input(
-        self, priv_s: torch.Tensor, publ_s: torch.Tensor
-    ) -> tuple[list[torch.Tensor], list[torch.Tensor]]:
-        '''
-        self.equivariant_input(
-            priv_s: Tensor[batch, priv_in_dim],
-            publ_s: Tensor[batch, publ_in_dim],
-        ) -> (priv_s, publ_s)
-        '''
-        in_color, _, in_nocolor, _ = self.color_indices
-        if priv_s.dim() == 2: # jit doesn't support ... followed by tensor indexing
-            unpacked_priv_s = [priv_s[:, in_nocolor], priv_s[:, in_color]]
-            unpacked_publ_s = [publ_s[:, in_nocolor - 125], publ_s[:, in_color[25:] - 125]]
-        else:
-            unpacked_priv_s = [priv_s[:, :, in_nocolor], priv_s[:, :, in_color]]
-            unpacked_publ_s = [publ_s[:, :, in_nocolor - 125], publ_s[:, :, in_color[25:] - 125]]
-        return unpacked_priv_s, unpacked_publ_s
-
-    @torch.jit.script_method
-    def equivariant_output(self, a: torch.Tensor) -> torch.Tensor:
-        '''
-        self.equivariant_output(
-            a: list[Tensor[batch, permutation, out_dim]]
-        ) -> a
-        '''
-        a0, a1 = a[0].squeeze(-2), a[1].squeeze(-1)
-        return torch.cat([a0[..., :10], a1, a0[..., 10:]], dim=-1)
-
-    @torch.jit.script_method
-    def get_h0(self, batchsize: int) -> dict[str, torch.Tensor]:
+    def get_h0(self, batchsize: int) -> dict[str, Tensor]:
         return {}
 
     @torch.jit.script_method
     def act(
-        self, priv_s: torch.Tensor, publ_s: torch.Tensor, hid: dict[str, torch.Tensor]
-    ) -> tuple[torch.Tensor, dict[str, torch.Tensor]]:
+        self, priv_s: Tensor, publ_s: Tensor, hid: dict[str, Tensor]
+    ) -> tuple[Tensor, dict[str, Tensor]]:
         '''
         model.act(
             priv_s: Tensor[batch, priv_in_dim],
@@ -166,8 +163,7 @@ class Model(torch.jit.ScriptModule):
         '''
         assert priv_s.dim() == 2, f"dim should be 2, [batch, dim], get {priv_s.shape}"
 
-        if self.eqc:
-            priv_s, publ_s, hid = self.eqc_permute_input(priv_s, publ_s, hid)
+        priv_s, publ_s, hid = self.permute_input(priv_s, publ_s, hid)
 
         # hid: [batch, num_layer, num_player, dim] -> [num_layer, batch x num_player, dim]
         if hid:
@@ -175,10 +171,7 @@ class Model(torch.jit.ScriptModule):
             hid = {k: v.transpose(0, 1).flatten(1, 2).contiguous() for k, v in hid.items()}
         # TODO: act has, but forward doesn't. If both need, move to Net.
 
-        if self.equivariant:
-            o, hid = self.net(*self.equivariant_input(priv_s, publ_s), hid)
-        else:
-            o, hid = self.net(priv_s, publ_s, hid)
+        o, hid = self.net(priv_s, publ_s, hid)
         a = self.fc_a(o)
 
         # hid: [num_layer, batch x num_player, dim] -> [batch, num_layer, num_player, dim]
@@ -187,22 +180,18 @@ class Model(torch.jit.ScriptModule):
             interim_hid_shape = (self.num_lstm_layer, batchsize, -1, self.hid_dim)
             hid = {k: v.view(*interim_hid_shape).transpose(0, 1) for k, v in hid.items()}
 
-        if self.eqc:
-            a, hid = self.eqc_symmetrize_output(a, hid)
-        elif self.equivariant:
-            a = self.equivariant_output(a)
-
+        a, hid = self.permute_output(a, hid)
         return a, hid
 
     @torch.jit.script_method
     def forward(
         self,
-        priv_s: torch.Tensor,
-        publ_s: torch.Tensor,
-        legal_move: torch.Tensor,
-        action: torch.Tensor,
-        hid: dict[str, torch.Tensor],
-    ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
+        priv_s: Tensor,
+        publ_s: Tensor,
+        legal_move: Tensor,
+        action: Tensor,
+        hid: dict[str, Tensor],
+    ) -> tuple[Tensor, Tensor, Tensor, Tensor]:
         '''
         model(
             priv_s: Tensor[(seq_len), batch, priv_in_dim],
@@ -218,16 +207,11 @@ class Model(torch.jit.ScriptModule):
         )
         '''
         assert priv_s.dim() == 3 or priv_s.dim() == 2, f"dim = 3 or 2, [(seq_len), batch, dim], get {priv_s.shape}"
-        if self.eqc:
-            priv_s, publ_s, hid = self.eqc_permute_input(priv_s, publ_s, hid)
+        priv_s, publ_s, hid = self.permute_input(priv_s, publ_s, hid)
         o, hid = self.net(priv_s, publ_s, hid)
-        if self.equivariant:
-            a = self.equivariant_output(self.fc_a(o)) # [(seq_len), batch]
-        else:
-            a = self.fc_a(o) # [(seq_len), batch]
-        if self.eqc:
-            a, hid = self.eqc_symmetrize_output(a, hid)
-        v = self.fc_v(o, pack=True) # [(seq_len), batch]
+        a = self.fc_a(o) # [(seq_len), batch]
+        a, hid = self.permute_output(a, hid)
+        v = self.fc_v(o) # [(seq_len), batch]
         legal_a = a * legal_move
         q = v + legal_a - legal_a.mean(-1, keepdim=True)
         qa = q.gather(-1, action.unsqueeze(-1)).squeeze(-1)
@@ -266,28 +250,26 @@ class Model(torch.jit.ScriptModule):
 
 
 class R2D2Agent(torch.jit.ScriptModule):
-    __constants__ = ["vdn", "multi_step", "gamma", "eta", "boltzmann", "uniform_priority", "net"]
+    __constants__ = ["vdn", "boltzmann", "uniform_priority", "off_belief", "multi_step", "gamma", "eta"]
 
     def __init__(self, hparams=hparams):
         super().__init__()
         self.hparams = hparams
+        self.vdn = hparams['vdn']
+        self.boltzmann = hparams['boltzmann_act']
+        self.uniform_priority = hparams['uniform_priority']
+        self.off_belief = hparams['off_belief']
+        self.multi_step = hparams['multi_step']
+        self.gamma = hparams['gamma']
+        self.eta = hparams['eta']
+
         self.online_net = Model(hparams)
         self.target_net = Model(hparams)
         for p in self.target_net.parameters():
             p.requires_grad = False
-        #self.vdn = vdn
-        #self.multi_step = multi_step
-        #self.gamma = gamma
-        #self.eta = eta
-        #self.net = net
-        #self.num_lstm_layer = num_lstm_layer
-        #self.boltzmann = boltzmann_act
-        #self.uniform_priority = uniform_priority
-        #self.off_belief = off_belief
-        #self.equivariant = equivariant
 
     @torch.jit.script_method
-    def get_h0(self, batchsize: int) -> dict[str, torch.Tensor]:
+    def get_h0(self, batchsize: int) -> dict[str, Tensor]:
         return self.online_net.get_h0(batchsize)
 
     def clone(self, device, override=None):
@@ -307,11 +289,11 @@ class R2D2Agent(torch.jit.ScriptModule):
     @torch.jit.script_method
     def greedy_act(
         self,
-        priv_s: torch.Tensor,
-        publ_s: torch.Tensor,
-        legal_move: torch.Tensor,
-        hid: dict[str, torch.Tensor],
-    ) -> tuple[torch.Tensor, dict[str, torch.Tensor]]:
+        priv_s: Tensor,
+        publ_s: Tensor,
+        legal_move: Tensor,
+        hid: dict[str, Tensor],
+    ) -> tuple[Tensor, dict[str, Tensor]]:
         adv, new_hid = self.online_net.act(priv_s, publ_s, hid)
         legal_adv = (1 + adv - adv.min()) * legal_move
         greedy_action = legal_adv.argmax(1).detach()
@@ -320,12 +302,12 @@ class R2D2Agent(torch.jit.ScriptModule):
     @torch.jit.script_method
     def boltzmann_act(
         self,
-        priv_s: torch.Tensor,
-        publ_s: torch.Tensor,
-        legal_move: torch.Tensor,
-        temperature: torch.Tensor,
-        hid: dict[str, torch.Tensor],
-    ) -> tuple[torch.Tensor, dict[str, torch.Tensor], torch.Tensor]:
+        priv_s: Tensor,
+        publ_s: Tensor,
+        legal_move: Tensor,
+        temperature: Tensor,
+        hid: dict[str, Tensor],
+    ) -> tuple[Tensor, dict[str, Tensor], Tensor]:
         adv, new_hid = self.online_net.act(priv_s, publ_s, hid)
         temperature = temperature.unsqueeze(1)
         assert adv.dim() == temperature.dim()
@@ -337,7 +319,7 @@ class R2D2Agent(torch.jit.ScriptModule):
         return action, new_hid, prob
 
     @torch.jit.script_method
-    def act(self, obs: dict[str, torch.Tensor]) -> dict[str, torch.Tensor]:
+    def act(self, obs: dict[str, Tensor]) -> dict[str, Tensor]:
         """
         Acts on the given obs, with eps-greedy policy.
         output: {'a' : actions}, a long Tensor of shape
@@ -351,7 +333,7 @@ class R2D2Agent(torch.jit.ScriptModule):
         else:
             eps = torch.zeros((priv_s.size(0),), device=priv_s.device)
 
-        if self.hparams['vdn']:
+        if self.vdn:
             bsize, num_player = obs["priv_s"].size()[:2]
             priv_s = obs["priv_s"].flatten(0, 1)
             publ_s = obs["publ_s"].flatten(0, 1)
@@ -361,7 +343,7 @@ class R2D2Agent(torch.jit.ScriptModule):
 
         hid = {"h0": obs["h0"], "c0": obs["c0"]}
 
-        if self.hparams['boltzmann']:
+        if self.boltzmann:
             temp = obs["temperature"].flatten(0, 1)
             greedy_action, new_hid, prob = self.boltzmann_act(
                 priv_s, publ_s, legal_move, temp, hid
@@ -371,15 +353,12 @@ class R2D2Agent(torch.jit.ScriptModule):
             greedy_action, new_hid = self.greedy_act(priv_s, publ_s, legal_move, hid)
             reply = {}
 
-        if self.hparams['greedy']:
-            action = greedy_action
-        else:
-            assert greedy_action.size() == eps.size()
-            random_action = legal_move.multinomial(1).squeeze(1)
-            rand = torch.rand(greedy_action.size(), device=greedy_action.device)
-            action = torch.where(rand < eps, random_action, greedy_action).detach().long()
+        assert greedy_action.size() == eps.size()
+        random_action = legal_move.multinomial(1).squeeze(1)
+        rand = torch.rand(greedy_action.size(), device=greedy_action.device)
+        action = torch.where(rand < eps, random_action, greedy_action).detach().long()
 
-        if self.hparams['vdn']:
+        if self.vdn:
             action = action.view(bsize, num_player)
             greedy_action = greedy_action.view(bsize, num_player)
             # rand = rand.view(bsize, num_player)
@@ -390,8 +369,8 @@ class R2D2Agent(torch.jit.ScriptModule):
         return reply
 
     @torch.jit.script_method
-    def compute_target(self, input_: dict[str, torch.Tensor]) -> dict[str, torch.Tensor]:
-        assert self.hparams['multi_step'] == 1
+    def compute_target(self, input_: dict[str, Tensor]) -> dict[str, Tensor]:
+        assert self.multi_step == 1
         priv_s = input_["priv_s"]
         publ_s = input_["publ_s"]
         legal_move = input_["legal_move"]
@@ -406,7 +385,7 @@ class R2D2Agent(torch.jit.ScriptModule):
         reward = input_["reward"]
         terminal = input_["terminal"]
 
-        if self.hparams['boltzmann']:
+        if self.boltzmann:
             temp = input_["temperature"].flatten(0, 1)
             next_a, _, next_pa = self.boltzmann_act(
                 priv_s, publ_s, legal_move, temp, act_hid
@@ -418,12 +397,12 @@ class R2D2Agent(torch.jit.ScriptModule):
             qa = self.target_net(priv_s, publ_s, legal_move, next_a, fwd_hid)[0]
 
         assert reward.size() == qa.size()
-        target = reward + (1 - terminal) * self.hparams['gamma'] * qa
+        target = reward + (1 - terminal) * self.gamma * qa
         return {"target": target.detach()}
 
     @torch.jit.script_method
-    def compute_priority(self, input_: dict[str, torch.Tensor]) -> dict[str, torch.Tensor]:
-        if self.hparams['uniform_priority']:
+    def compute_priority(self, input_: dict[str, Tensor]) -> dict[str, Tensor]:
+        if self.uniform_priority:
             return {"priority": torch.ones_like(input_["reward"].sum(1))}
 
         # swap batch_dim and seq_dim
@@ -436,10 +415,10 @@ class R2D2Agent(torch.jit.ScriptModule):
             "publ_s": input_["publ_s"],
             "legal_move": input_["legal_move"],
         }
-        if self.hparams['boltzmann']:
+        if self.boltzmann:
             obs["temperature"] = input_["temperature"]
 
-        if self.hparams['off_belief']:
+        if self.off_belief:
             obs["target"] = input_["target"]
 
         hid = {"h0": input_["h0"], "c0": input_["c0"]}
@@ -458,14 +437,14 @@ class R2D2Agent(torch.jit.ScriptModule):
     @torch.jit.script_method
     def td_error(
         self,
-        obs: dict[str, torch.Tensor],
-        hid: dict[str, torch.Tensor],
-        action: dict[str, torch.Tensor],
-        reward: torch.Tensor,
-        terminal: torch.Tensor,
-        bootstrap: torch.Tensor,
-        seq_len: torch.Tensor,
-    ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
+        obs: dict[str, Tensor],
+        hid: dict[str, Tensor],
+        action: dict[str, Tensor],
+        reward: Tensor,
+        terminal: Tensor,
+        bootstrap: Tensor,
+        seq_len: Tensor,
+    ) -> tuple[Tensor, Tensor, Tensor]:
         max_seq_len = obs["priv_s"].size(0)
         priv_s = obs["priv_s"]
         publ_s = obs["publ_s"]
@@ -476,7 +455,7 @@ class R2D2Agent(torch.jit.ScriptModule):
             hid[k] = v.flatten(1, 2).contiguous()
 
         bsize, num_player = priv_s.size(1), 1
-        if self.hparams['vdn']:
+        if self.vdn:
             num_player = priv_s.size(2)
             priv_s = priv_s.flatten(1, 2)
             publ_s = publ_s.flatten(1, 2)
@@ -489,14 +468,14 @@ class R2D2Agent(torch.jit.ScriptModule):
             priv_s, publ_s, legal_move, action, hid
         )
 
-        if self.hparams['off_belief']:
+        if self.off_belief:
             target = obs["target"]
         else:
             target_qa, _, target_q, _ = self.target_net(
                 priv_s, publ_s, legal_move, greedy_a, hid
             )
 
-            if self.hparams['boltzmann']:
+            if self.boltzmann:
                 temperature = obs["temperature"].flatten(1, 2).unsqueeze(2)
                 # online_q: [seq_len, bathc * num_player, num_action]
                 logit = online_q / temperature.clamp(min=1e-6)
@@ -510,7 +489,7 @@ class R2D2Agent(torch.jit.ScriptModule):
                 target_qa = (pa * target_q).sum(-1).detach()
                 assert online_qa.size() == target_qa.size()
 
-            if self.hparams['vdn']:
+            if self.vdn:
                 online_qa = online_qa.view(max_seq_len, bsize, num_player).sum(-1)
                 target_qa = target_qa.view(max_seq_len, bsize, num_player).sum(-1)
                 lstm_o = lstm_o.view(max_seq_len, bsize, num_player, -1)

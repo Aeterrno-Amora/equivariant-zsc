@@ -1,7 +1,8 @@
+from typing import Optional
 from itertools import permutations
 import math
 import torch
-from torch import nn
+from torch import nn, Tensor
 
 
 color_indices = None
@@ -58,26 +59,30 @@ def build_perms(priv_in_dim, out_dim, symmetries) -> tuple[torch.LongTensor, tor
 #     in_channel: int, out_channel: int
 # )]
 
-def num_perms(n, m):
+def num_perms(n: int, m: int):
     return math.factorial(n) // math.factorial(n - m)
 
 def overlap(n, s, t):
     # the signature function described in the paper
-    inv_t = torch.full(n, -1, dtype=torch.long)
-    inv_t[t] = torch.arange(len(t), dtype=torch.long)
+    inv_t = [-1 for _ in range(n)]
+    for i, j in enumerate(t):
+        inv_t[j] = i
     return tuple(i * 10 + inv_t[i] for i in s if inv_t[i] >= 0)
 
-def pack_gset(input):
+def pack_gset(input: list[Tensor]) -> Tensor:
     '''list[Tensor[..., permutation, channel]] -> Tensor[..., dim]'''
     return torch.cat([x.flatten(-2, -1) for x in input], dim=-1)
 
-def unpack_gset(input, n, channels):
+def unpack_gset(input: Tensor, n: int, channels: list[int]) -> list[Tensor]:
     '''Tensor[..., dim] -> list[Tensor[..., permutation, channel]]'''
     output = []
     index = 0
     for len, ch in enumerate(channels):
         n_perms = num_perms(n, len)
-        output.append(input[..., index : index + n_perms * ch].view(*input.size()[:-1], -1, ch))
+        if input.dim() == 2:
+            output.append(input[:, index : index + n_perms * ch].view(input.size(0), n_perms, ch))
+        else:
+            output.append(input[:, :, index : index + n_perms * ch].view(input.size(0), input.size(1), n_perms, ch))
         index += n_perms * ch
     return output
 
@@ -85,7 +90,7 @@ def total_size(n, channels):
     return sum(num_perms(n, len) * ch for len, ch in enumerate(channels))
 
 
-class EqLinear(nn.Module):
+class EqLinear(torch.jit.ScriptModule):
     __constants__ = ['n', 'in_channels', 'out_channels']
 
     def __init__(self, in_channels, out_channels, n=5, radius=1, bias=True):
@@ -95,7 +100,7 @@ class EqLinear(nn.Module):
         self.out_channels = out_channels
 
         self.weight = nn.ParameterDict()
-        self.kernels = {}
+        self.kernels = []
         for len2, ch2 in enumerate(self.out_channels):
             for len1, ch1 in enumerate(self.in_channels):
                 if radius >= 0 and abs(len1 - len2) > radius:
@@ -115,12 +120,12 @@ class EqLinear(nn.Module):
                     weight_idx.append(weight_id)
                     neighbors.append(neighbor)
                 self.weight[f'{len1}{len2}'] = nn.Parameter(torch.empty(len(weight_map), ch2, ch1))
-                self.kernels[len1, len2] = (
+                self.kernels.append((
+                    len1, len2, ch1, ch2,
                     self.weight[f'{len1}{len2}'],
                     torch.tensor(weight_idx, dtype=torch.long),
                     torch.tensor(neighbors, dtype=torch.long),
-                    ch1, ch2
-                )
+                ))
         if bias:
             self.bias = nn.ParameterList([nn.Parameter(torch.empty(ch)) for ch in out_channels])
         else:
@@ -130,37 +135,38 @@ class EqLinear(nn.Module):
     def reset_parameters(self):
         assert(len(list(self.parameters())))
         fan_in = [0 for _ in self.out_channels]
-        for (_, len2), (_, _, neighbors, ch1, _) in self.kernels.items():
+        for _, len2, ch1, _, _, _, neighbors in self.kernels:
             fan_in[len2] += neighbors.size(-1) * ch1
         std = [nn.init.calculate_gain('relu') / math.sqrt(fan) for fan in fan_in]
-        for (_, len2), (weight, _, _, _, _) in self.kernels.items():
-            nn.init.normal_(weight, 0, -std[len2])
+        for _, len2, _, _, weight, _, _ in self.kernels:
+            nn.init.normal_(weight, 0, std[len2])
         if self.bias is not None:
             for bias in self.bias:
                 nn.init.zeros_(bias)
 
-    def forward(self, input, pack=False):
-        '''
-        input / output: list[Tensor[..., permutation, in/out_channel]]
-        '''
-        if isinstance(input, torch.Tensor):
-            input = unpack_gset(input, self.n, self.in_channels)
-        output = [None for _ in self.out_channels]
-        for (len1, len2), (weight, weight_idx, neighbors, _, _) in self.kernels.items():
+    @torch.jit.script_method
+    def _forward(self, input: list[Tensor]) -> list[Tensor]:
+        output = [torch.empty(()) for _ in self.out_channels]
+        # should use list[None], but jit doesn't support it
+        for len1, len2, _, _, weight, weight_idx, neighbors in self.kernels:
             x = input[len1]
             # x[..., neighbors, :]: Tensor[batch, out_permutation, kernel_size, in_channel]
             # weight[weight_idx]: Tensor[out_permutation, kernel_size, out_channel, in_channel]
-            y = (x[..., neighbors, :].unsequeeze(-2) * weight[weight_idx]).sum((-3, -1))
-            if output[len2] is None:
+            # jit doesn't support ... followed by tensor indexing
+            x = x[:, neighbors, :] if x.dim() == 3 else x[:, :, neighbors, :]
+            y = (x[:, neighbors, :].unsqueeze(-2) * weight[weight_idx]).sum((-3, -1))
+            if not output[len2].size():
                 output[len2] = y
             else:
                 output[len2] = output[len2] + y
-        if pack:
-            output = pack_gset(output)
         return output
 
+    @torch.jit.script_method
+    def forward(self, input: Tensor) -> Tensor:
+        return pack_gset(self._forward(unpack_gset(input, self.n, self.in_channels)))
 
-class EqLSTMCell(nn.Module):
+
+class EqLSTMCell(torch.jit.ScriptModule):
     __constants__ = ['n', 'in_channels', 'hid_channels', 'gate_channels']
 
     def __init__(self, in_channels, hid_channels, n=5):
@@ -171,40 +177,32 @@ class EqLSTMCell(nn.Module):
         self.gate_channels = tuple(ch * 4 for ch in hid_channels)
 
         self.linear = EqLinear(tuple(ch1 + ch2 for ch1, ch2 in zip(in_channels, hid_channels)), self.gate_channels, n)
-        self.reset_parameters()
 
-    def reset_parameters(self):
-        assert(len(list(self.parameters())))
-        stdv = 1.0 / math.sqrt(self.hid_size)
-        for weight in self.parameters():
-            nn.init.uniform_(weight, -stdv, stdv)
-
-    def forward(self, input, hid=None, pack=False):
-        '''
-        input: list[Tensor[..., permutation, in_channel]]
-        h0, c0: list[Tensor[..., permutation, hid_channel]]
-        '''
-        if isinstance(input, torch.Tensor):
-            input = unpack_gset(input, self.n, self.in_channels)
-        if hid is None:
-            h0 = c0 = [torch.zeros(*x.size()[:-1], self.hid_channels, device=x.device) for x in input]
+    @torch.jit.script_method
+    def forward(self, input: Tensor, hid: Optional[tuple[Tensor, Tensor]] = None) -> tuple[Tensor, Tensor]:
+        input = unpack_gset(input, self.n, self.in_channels)
+        if hid is not None:
+            h0 = unpack_gset(hid[0], self.n, self.hid_channels)
+            c0 = unpack_gset(hid[1], self.n, self.hid_channels)
         else:
-            h0, c0 = hid
-            if isinstance(c0, torch.Tensor):
-                h0 = unpack_gset(h0, self.n, self.hid_channels)
-                c0 = unpack_gset(c0, self.n, self.hid_channels)
+            if input[0].dim() == 3:
+                c0 = [torch.zeros((x.size(0), x.size(1), self.hid_channels[i]), device=x.device)
+                      for i, x in enumerate(input)]
+            else:
+                c0 = [torch.zeros((x.size(0), x.size(1), self.hid_channels[i]), device=x.device)
+                      for i, x in enumerate(input)]
+            h0 = c0
 
-        gates = self.linear([torch.cat([x, h], dim=-1) for x, h in zip(input, h0)])
+        gates = self.linear._forward([torch.cat([x, h], dim=-1) for x, h in zip(input, h0)])
         h1, c1 = [], []
         for i, gate in enumerate(gates):
             g, input_gate, forget_gate, output_gate = gate.chunk(4, dim=-1)
             c1.append(g.tanh() * input_gate.sigmoid() + c0[i] * forget_gate.sigmoid())
             h1.append(c1[-1].tanh() * output_gate.sigmoid())
-        if pack:
-            h1, c1 = pack_gset(h1), pack_gset(c1)
+        h1, c1 = pack_gset(h1), pack_gset(c1)
         return h1, c1
 
-class EqLSTM(nn.Module):
+class EqLSTM(torch.jit.ScriptModule):
     __constants__ = ['n', 'in_channels', 'hid_channels', 'num_layers']
 
     def __init__(self, in_channels, hid_channels, num_layers, n=5):
@@ -219,26 +217,32 @@ class EqLSTM(nn.Module):
             for i in range(self.num_layers)
         )
 
-    def forward(self, input, hid=None, pack=False):
+    @torch.jit.script_method
+    def forward(self, input: Tensor, hid: Optional[tuple[Tensor, Tensor]] = None) \
+        -> tuple[Tensor, tuple[Tensor, Tensor]]:
         '''
         input / output: Tensor[seq_len, batch, dim] or list[list[Tensor[batch, permutation, channel]]
         h0, c0: Tensor[num_layers, batch, dim] or list[list[Tensor[batch, permutation, channel]]
         '''
-        if hid is None:
-            hid = [None for _ in range(self.num_layers)]
-        else:
-            if not isinstance(hid, list):
-                hid = list(zip(*hid))
+        hid_list = list(zip(hid[0], hid[1])) if hid is not None \
+                 else [(torch.empty(()), torch.empty(())) for _ in range(self.num_layers)]
 
         output = []
         for x in input:
-            for i in self.num_layers:
-                hid[i] = self.lstm[i](x, hid[i])
-            output.append(hid[-1][0])
+            # for i in range(self.num_layers):
+            #     hid_list[i] = self.lstm[i](x, hid_list[i])
+            #     x = hid_list[i][0]
+            # output.append(x)
+            assert self.num_layers == 2
+            y = self.lstm[0](x, hid_list[0] if hid_list[0][0].size() else None)
+            hid_list[0] = y
+            y = self.lstm[1](y[0], hid_list[1] if hid_list[0][0].size() else None)
+            output.append(y[0])
 
-        h0, c0 = zip(*hid)
-        if pack:
-            output = torch.cat([pack_gset(y) for y in output], dim=0)
-            h0 = torch.cat([pack_gset(h) for h in h0], dim=0)
-            c0 = torch.cat([pack_gset(c) for c in c0], dim=0)
+        # h0, c0 = zip(*hid)
+        h0 = [x[0] for x in hid_list]
+        c0 = [x[1] for x in hid_list]
+        output = torch.stack(output, dim=0)
+        h0 = torch.stack(h0, dim=0)
+        c0 = torch.stack(c0, dim=0)
         return output, (h0, c0)

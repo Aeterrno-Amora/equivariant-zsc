@@ -10,7 +10,7 @@ import utils
 
 
 class LegacyNet(torch.jit.ScriptModule):
-    __constants__ = ["hid_dim", "out_dim", "num_lstm_layer"]
+    __constants__ = ["hid_dim", "out_dim", "num_ff_layer", "num_lstm_layer", "skip_connect"]
 
     def __init__(self, device, in_dim, hid_dim, out_dim, num_ff_layer, skip_connect):
         super().__init__()
