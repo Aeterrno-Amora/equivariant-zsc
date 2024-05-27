@@ -11,7 +11,7 @@ import torch.nn.functional as F
 
 from common_utils.hparams import hparams
 from common_utils.checkpoint import build_object_from_config
-from equivariance import _init_color_indices, build_perms, color_indices, EqLinear, total_size
+from equivariance import _init_color_indices, build_perms, EqLinear, total_size
 
 
 class Model(torch.jit.ScriptModule):
@@ -20,10 +20,12 @@ class Model(torch.jit.ScriptModule):
         # for backward compatibility
         self.config = hparams['net']
 
-        if self.config['equivariant']:
-            in_color, in_nocolor, out_color, out_nocolor = _init_color_indices(
-                self.config['priv_in_dim'], self.config['out_dim']
-            )
+        self.color_indices = _init_color_indices(
+            self.config['priv_in_dim'], self.config['out_dim']
+        )
+        self.equivariant = self.config['equivariant']
+        if self.equivariant:
+            in_color, in_nocolor, out_color, out_nocolor = self.color_indices
             hid_channels = self.config['hid_channels']
             self.config['hid_dim'] = total_size(5, hid_channels)
             self.config['priv_in_channels'] = (in_nocolor.size(-1), in_color.size(-1))
@@ -62,6 +64,8 @@ class Model(torch.jit.ScriptModule):
             self.publ_in_perms = self.priv_in_perms[:, 125:] - 125
 
         self.net = build_object_from_config(self.config, parent_cls=nn.Module)
+        print(self.config)
+        print(type(self.net))
         # net(
         #   priv_s: Tensor[(seq_len), batch, priv_in_dim]
         #   publ_s: Tensor[(seq_len), batch, publ_in_dim]
@@ -86,8 +90,12 @@ class Model(torch.jit.ScriptModule):
             self.priv_in_perms: LongTensor[num_symmetries, priv_in_dim]
             self.publ_in_perms: LongTensor[num_symmetries, publ_in_dim]
         '''
-        priv_s = priv_s[..., self.priv_in_perms].flatten(-2, -3)
-        publ_s = publ_s[..., self.publ_in_perms].flatten(-2, -3)
+        if priv_s.dim() == 2: # jit doesn't support ... followed by tensor indexing
+            priv_s = priv_s[:, self.priv_in_perms].flatten(-2, -3)
+            publ_s = publ_s[:, self.publ_in_perms].flatten(-2, -3)
+        else:
+            priv_s = priv_s[:, :, self.priv_in_perms].flatten(-3, -4)
+            publ_s = publ_s[:, :, self.publ_in_perms].flatten(-3, -4)
         hid = {k: v.tile(self.num_symmetries, 1, 1, 1) for k, v in hid.items()}
         return priv_s, publ_s, hid
 
@@ -112,17 +120,21 @@ class Model(torch.jit.ScriptModule):
     @torch.jit.script_method
     def equivariant_input(
         self, priv_s: torch.Tensor, publ_s: torch.Tensor
-    ) -> tuple[torch.Tensor, torch.Tensor]:
+    ) -> tuple[list[torch.Tensor], list[torch.Tensor]]:
         '''
         self.equivariant_input(
             priv_s: Tensor[batch, priv_in_dim],
             publ_s: Tensor[batch, publ_in_dim],
         ) -> (priv_s, publ_s)
         '''
-        in_color, _, in_nocolor, _ = color_indices
-        priv_s = [priv_s[..., in_nocolor], priv_s[..., in_color]]
-        publ_s = [publ_s[..., in_nocolor - 125], publ_s[..., in_color[25:] - 125]]
-        return priv_s, publ_s
+        in_color, _, in_nocolor, _ = self.color_indices
+        if priv_s.dim() == 2: # jit doesn't support ... followed by tensor indexing
+            unpacked_priv_s = [priv_s[:, in_nocolor], priv_s[:, in_color]]
+            unpacked_publ_s = [publ_s[:, in_nocolor - 125], publ_s[:, in_color[25:] - 125]]
+        else:
+            unpacked_priv_s = [priv_s[:, :, in_nocolor], priv_s[:, :, in_color]]
+            unpacked_publ_s = [publ_s[:, :, in_nocolor - 125], publ_s[:, :, in_color[25:] - 125]]
+        return unpacked_priv_s, unpacked_publ_s
 
     @torch.jit.script_method
     def equivariant_output(self, a: torch.Tensor) -> torch.Tensor:
@@ -132,7 +144,7 @@ class Model(torch.jit.ScriptModule):
         ) -> a
         '''
         a0, a1 = a[0].squeeze(-2), a[1].squeeze(-1)
-        return torch.stack([a0[..., :10], a1, a0[..., 10:]], dim=-1)
+        return torch.cat([a0[..., :10], a1, a0[..., 10:]], dim=-1)
 
     @torch.jit.script_method
     def get_h0(self, batchsize: int) -> dict[str, torch.Tensor]:
@@ -156,8 +168,6 @@ class Model(torch.jit.ScriptModule):
 
         if self.eqc:
             priv_s, publ_s, hid = self.eqc_permute_input(priv_s, publ_s, hid)
-        elif self.equivariant:
-            priv_s, publ_s = self.equivariant_input(priv_s, publ_s)
 
         # hid: [batch, num_layer, num_player, dim] -> [num_layer, batch x num_player, dim]
         if hid:
@@ -165,7 +175,10 @@ class Model(torch.jit.ScriptModule):
             hid = {k: v.transpose(0, 1).flatten(1, 2).contiguous() for k, v in hid.items()}
         # TODO: act has, but forward doesn't. If both need, move to Net.
 
-        o, hid = self.net(priv_s, publ_s, hid)
+        if self.equivariant:
+            o, hid = self.net(*self.equivariant_input(priv_s, publ_s), hid)
+        else:
+            o, hid = self.net(priv_s, publ_s, hid)
         a = self.fc_a(o)
 
         # hid: [num_layer, batch x num_player, dim] -> [batch, num_layer, num_player, dim]
@@ -208,11 +221,12 @@ class Model(torch.jit.ScriptModule):
         if self.eqc:
             priv_s, publ_s, hid = self.eqc_permute_input(priv_s, publ_s, hid)
         o, hid = self.net(priv_s, publ_s, hid)
-        a = self.fc_a(o) # [(seq_len), batch]
+        if self.equivariant:
+            a = self.equivariant_output(self.fc_a(o)) # [(seq_len), batch]
+        else:
+            a = self.fc_a(o) # [(seq_len), batch]
         if self.eqc:
             a, hid = self.eqc_symmetrize_output(a, hid)
-        elif self.equivariant:
-            a = self.equivariant_output(a)
         v = self.fc_v(o, pack=True) # [(seq_len), batch]
         legal_a = a * legal_move
         q = v + legal_a - legal_a.mean(-1, keepdim=True)

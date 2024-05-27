@@ -1,8 +1,8 @@
 base_config: selfplay.yaml
 
 net:
-  cls: net.LSTMNet
-  hid_dim: [512, 64, 16]
+  cls: net.EqLSTMNet
+  hid_channels: [512, 64, 16]
   num_ff_layer: 1
   num_lstm_layer: 2
   public: True

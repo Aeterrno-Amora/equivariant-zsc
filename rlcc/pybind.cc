@@ -148,7 +148,7 @@ PYBIND11_MODULE(hanalearn, m) {
       .def_readwrite(
           "newly_revealed_bitmask", &HanabiHistoryItem::newly_revealed_bitmask);
 
-  py::class_<HanabiHand> hanabiHand(m, "HanabiHand")
+  auto hanabiHand = py::class_<HanabiHand>(m, "HanabiHand")
       .def(py::init<>())
       .def("cards", &HanabiHand::Cards)
       .def("knowledge_", &HanabiHand::Knowledge_, py::return_value_policy::reference)
@@ -199,7 +199,7 @@ PYBIND11_MODULE(hanalearn, m) {
       .def("to_string", &HanabiState::ToString)
       .def("is_terminal", &HanabiState::IsTerminal);
 
-  py::class_<HanabiMove> hanabiMove(m, "HanabiMove")
+  auto hanabiMove = py::class_<HanabiMove>(m, "HanabiMove")
       .def(py::init<HanabiMove::Type, int8_t, int8_t, int8_t, int8_t>(),
            "move_type"_a, "card_index"_a, "target_offset"_a, "color"_a, "rank"_a)
       .def("move_type", &HanabiMove::MoveType)

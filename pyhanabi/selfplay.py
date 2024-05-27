@@ -79,7 +79,8 @@ else:
     net_config['publ_in_dim'] = in_dim[2]
 agent = r2d2.R2D2Agent().to(hparams['train_device'])
 agent.sync_target_with_online()
-print(agent.state_dict())
+for k, v in agent.state_dict():
+    print(f'{k} {str(v.dtype)[6:]}{list(v.shape)}')
 
 if hparams['load_model'] and hparams['load_model'] != "None":
     if hparams['off_belief'] and hparams['belief_model'] != "None":

@@ -15,10 +15,10 @@ def _init_color_indices(priv_in_dim, out_dim):
     # in_nocolor: LongTensor[k], indices not related to any color
     color = torch.arange(0, 5, dtype=torch.long).view(5, 1)
     card = torch.arange(0, 25, dtype=torch.long).view(5, 5)
-    hand = torch.stack([card + 25 * i for i in range(5)], dim=1)
-    v0 = torch.stack([card, color + 25], dim=1)
-    v0 = torch.stack([v0 + 35 * i for i in range(10)], dim=1)
-    in_color = torch.stack([
+    hand = torch.cat([card + 25 * i for i in range(5)], dim=1)
+    v0 = torch.cat([card, color + 25], dim=1)
+    v0 = torch.cat([v0 + 35 * i for i in range(10)], dim=1)
+    in_color = torch.cat([
         hand, # partner hand
         card + 167, # fireworks
         torch.arange(0, 50, dtype=torch.long).view(5, 10) + 203, # discard
@@ -88,7 +88,7 @@ def total_size(n, channels):
 class EqLinear(nn.Module):
     __constants__ = ['n', 'in_channels', 'out_channels']
 
-    def __init__(self, n : int, in_channels, out_channels, radius=-1, bias=True):
+    def __init__(self, in_channels, out_channels, n=5, radius=1, bias=True):
         super().__init__()
         self.n = n
         self.in_channels = in_channels
@@ -98,7 +98,7 @@ class EqLinear(nn.Module):
         self.kernels = {}
         for len2, ch2 in enumerate(self.out_channels):
             for len1, ch1 in enumerate(self.in_channels):
-                if abs(len1 - len2) > radius:
+                if radius >= 0 and abs(len1 - len2) > radius:
                     continue
                 weight_map = {}
                 weight_idx, neighbors = [], []
@@ -106,7 +106,7 @@ class EqLinear(nn.Module):
                     weight_id, neighbor = [], []
                     for i1, perm1 in enumerate(permutations(range(n), len1)):
                         sig = overlap(n, perm1, perm2)
-                        if len1 + len2 - 2 * len(sig) > radius:
+                        if radius >= 0 and len1 + len2 - 2 * len(sig) > radius:
                             continue
                         if sig not in weight_map:
                             weight_map[sig] = len(weight_map)
@@ -163,14 +163,14 @@ class EqLinear(nn.Module):
 class EqLSTMCell(nn.Module):
     __constants__ = ['n', 'in_channels', 'hid_channels', 'gate_channels']
 
-    def __init__(self, n, in_channels, hid_channels):
+    def __init__(self, in_channels, hid_channels, n=5):
         super().__init__()
         self.n = n
         self.in_channels = in_channels
         self.hid_channels = hid_channels
         self.gate_channels = tuple(ch * 4 for ch in hid_channels)
 
-        self.linear = EqLinear(n, tuple(ch1 + ch2 for ch1, ch2 in zip(in_channels, hid_channels)), self.gate_channels)
+        self.linear = EqLinear(tuple(ch1 + ch2 for ch1, ch2 in zip(in_channels, hid_channels)), self.gate_channels, n)
         self.reset_parameters()
 
     def reset_parameters(self):
@@ -194,7 +194,7 @@ class EqLSTMCell(nn.Module):
                 h0 = unpack_gset(h0, self.n, self.hid_channels)
                 c0 = unpack_gset(c0, self.n, self.hid_channels)
 
-        gates = self.linear([torch.stack([x, h], dim=-1) for x, h in zip(input, h0)])
+        gates = self.linear([torch.cat([x, h], dim=-1) for x, h in zip(input, h0)])
         h1, c1 = [], []
         for i, gate in enumerate(gates):
             g, input_gate, forget_gate, output_gate = gate.chunk(4, dim=-1)
@@ -207,7 +207,7 @@ class EqLSTMCell(nn.Module):
 class EqLSTM(nn.Module):
     __constants__ = ['n', 'in_channels', 'hid_channels', 'num_layers']
 
-    def __init__(self, n, in_channels, hid_channels, num_layers):
+    def __init__(self, in_channels, hid_channels, num_layers, n=5):
         super().__init__()
         self.n = n
         self.in_channels = in_channels
@@ -215,7 +215,7 @@ class EqLSTM(nn.Module):
         self.num_layers = num_layers
 
         self.lstm = nn.ModuleList(
-            EqLSTMCell(self.n, self.hid_channels if i else self.in_channels, self.hid_channels)
+            EqLSTMCell(self.hid_channels if i else self.in_channels, self.hid_channels, self.n)
             for i in range(self.num_layers)
         )
 
@@ -238,7 +238,7 @@ class EqLSTM(nn.Module):
 
         h0, c0 = zip(*hid)
         if pack:
-            output = torch.stack([pack_gset(y) for y in output], dim=0)
-            h0 = torch.stack([pack_gset(h) for h in h0], dim=0)
-            c0 = torch.stack([pack_gset(c) for c in c0], dim=0)
+            output = torch.cat([pack_gset(y) for y in output], dim=0)
+            h0 = torch.cat([pack_gset(h) for h in h0], dim=0)
+            c0 = torch.cat([pack_gset(c) for c in c0], dim=0)
         return output, (h0, c0)

@@ -36,6 +36,10 @@ def load_config(config_fn):
     loaded_config = set()
 
     def _load(config_fn):  # deep first
+        if not config_fn.endswith('.yaml'):
+            config_fn += '.yaml'
+        if not os.path.exists(config_fn):
+            config_fn = os.path.join('configs', config_fn)
         with open(config_fn, encoding='utf-8') as f:
             hparams_ = yaml.load(f, yaml.Loader)
         loaded_config.add(config_fn)
@@ -63,19 +67,19 @@ def set_hparams(config='', exp_name='', hparams_str='', print_hparams=True, glob
     """
         Load hparams from multiple sources:
         1. config chain (i.e. first load base_config, then load config);
-        2. if reset == True, load from the (auto-saved) complete config file ('config.yaml')
+        2. if not reset, load from the (auto-saved) complete config file ('config.yaml')
            which contains all settings and do not rely on base_config;
         3. load from argument --hparams or hparams_str, as temporary modification.
     """
     if config == '':
         parser = argparse.ArgumentParser(description='neural music')
-        parser.add_argument('--config', type=str, default='',
-                            help='location of the data corpus')
-        parser.add_argument('--exp_name', type=str, default='', help='exp_name')
+        parser.add_argument('--config', type=str, default='', help='Path to a yaml file')
+        parser.add_argument('--exp_name', type=str, default='', help='Determines work_dir')
         parser.add_argument('--hparams', type=str, default='',
-                            help='location of the data corpus')
-        parser.add_argument('--infer', action='store_true', help='infer')
-        parser.add_argument('--reset', action='store_true', help='reset hparams')
+                            help='Temporarily override yaml config, e.g., "vdn=False,batch_size=128,lr=1e-3"')
+        parser.add_argument('--infer', action='store_true', help='Inference')
+        parser.add_argument('--reset', action='store_true',
+                            help='Ignore config in existing work_dir, e.g., when resetting and restarting an experiment.')
         args, unknown = parser.parse_known_args()
         
         tmp_args_hparams = args.hparams.split(',') if args.hparams.strip() != '' else []
@@ -85,12 +89,12 @@ def set_hparams(config='', exp_name='', hparams_str='', print_hparams=True, glob
         args = Args(config=config, exp_name=exp_name, hparams=hparams_str,
                     infer=False, reset=False)
 
+    global hparams
     args_work_dir = ''
     if args.exp_name != '':
         hparams['work_dir'] = args.exp_name
         args_work_dir = os.path.join('checkpoints', hparams['work_dir'])
 
-    global hparams
     assert args.config != '' or args_work_dir != '', 'Either config or exp name should be specified.'
     saved_hparams = {}
     ckpt_config_path = os.path.join(args_work_dir, 'config.yaml')
