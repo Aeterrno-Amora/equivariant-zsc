@@ -1,4 +1,4 @@
-seed: 10001
+seed: 2254257
 
 shuffle_color: 0
 trinary: True # trinary aux or full aux
@@ -26,8 +26,8 @@ eval_bomb: 0 # used in eval.evaluate()
 sad: 1
 
 # actor settings
-num_thread: 10 # number of thread_loop
-num_game_per_thread: 40
+num_thread: 39 # number of thread_loop
+num_game_per_thread: 80
 act_device: cuda:1 # can be multiple devices seperated by ','
 actor_sync_freq: 10
 # acting strategy
@@ -49,9 +49,9 @@ prefetch: 3 # number of prefetch batch
 
 # optimization/training settings
 train_device: cuda:0
-batchsize: 64
-num_epoch: 5000
-epoch_len: 1000
+batchsize: 256
+num_epoch: 1000
+epoch_len: 2000
 num_update_between_sync: 2500
 lr: 6.25e-5
 eps: 1.5e-5 # Adam epsilon
